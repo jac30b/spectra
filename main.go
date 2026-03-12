@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"os"
 	"os/signal"
@@ -29,9 +28,19 @@ func main() {
 
 	// Parse command line flags
 	pidFlag := flag.Int("pid", 0, "PID to trace (0 = trace all processes)")
+	futexFlag := flag.Bool("futex", true, "Enable futex tracing")
+	schedSwitchFlag := flag.Bool("sched-switch", true, "Enable sched_switch tracing")
+	pageFaultFlag := flag.Bool("page-fault", true, "Enable page_fault_user tracing")
+	ioctlFlag := flag.Bool("ioctl", true, "Enable ioctl tracing")
 	flag.Parse()
 
-	logger.Info("Starting spectra tracer", zap.Int("pid", *pidFlag))
+	logger.Info("Starting spectra tracer",
+		zap.Int("pid", *pidFlag),
+		zap.Bool("futex", *futexFlag),
+		zap.Bool("sched_switch", *schedSwitchFlag),
+		zap.Bool("page_fault", *pageFaultFlag),
+		zap.Bool("ioctl", *ioctlFlag),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -43,7 +52,13 @@ func main() {
 
 	signal.Notify(stop, os.Interrupt)
 
-	tracer, err := ebpf.NewTracer(ctx, uint32(*pidFlag), ebpf.WithLogger(logger), ebpf.WithTraceFutex(true))
+	tracer, err := ebpf.NewTracer(ctx, uint32(*pidFlag),
+		ebpf.WithLogger(logger),
+		ebpf.WithTraceFutex(*futexFlag),
+		ebpf.WithTraceSchedSwitch(*schedSwitchFlag),
+		ebpf.WithTracePageFault(*pageFaultFlag),
+		ebpf.WithTraceIoctl(*ioctlFlag),
+	)
 	if err != nil {
 		logger.Fatal("failed to create tracer", zap.Error(err))
 	}
@@ -56,12 +71,7 @@ func main() {
 				logger.Error("failed to pull data", zap.Error(err))
 				continue
 			}
-			data, err := json.Marshal(res)
-			if err != nil {
-				logger.Error("failed to marshal data", zap.Error(err))
-				continue
-			}
-			logger.Debug("futex stats", zap.String("data", string(data)))
+			logger.Debug("tracer stats", zap.Object("data", res))
 		case <-stop:
 			logger.Info("received interrupt signal, shutting down")
 			err = tracer.Stop()

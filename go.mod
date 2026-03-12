@@ -7,6 +7,7 @@ tool github.com/cilium/ebpf/cmd/bpf2go
 require (
 	github.com/cilium/ebpf v0.21.0
 	go.uber.org/zap v1.27.1
+	golang.org/x/sync v0.17.0
 )
 
 require (
