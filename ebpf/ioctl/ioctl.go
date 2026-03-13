@@ -37,6 +37,7 @@ func StartTracingIoctl(logger *zap.Logger, pid uint32) (*ioctlTracer, error) {
 	// Attach to sys_enter_ioctl tracepoint
 	linkEntry, err := link.Tracepoint("syscalls", "sys_enter_ioctl", obj.IoctlEntry, nil)
 	if err != nil {
+		_ = obj.Close()
 		logger.Error("failed to attach to sys_enter_ioctl tracepoint", zap.Error(err))
 		return nil, err
 	}
@@ -44,6 +45,8 @@ func StartTracingIoctl(logger *zap.Logger, pid uint32) (*ioctlTracer, error) {
 	// Attach to sys_exit_ioctl tracepoint
 	linkExit, err := link.Tracepoint("syscalls", "sys_exit_ioctl", obj.IoctlExit, nil)
 	if err != nil {
+		_ = linkEntry.Close()
+		_ = obj.Close()
 		logger.Error("failed to attach to sys_exit_ioctl tracepoint", zap.Error(err))
 		return nil, err
 	}

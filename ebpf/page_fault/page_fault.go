@@ -36,6 +36,7 @@ func StartTracingPageFault(logger *zap.Logger, pid uint32) (*pageFault, error) {
 	// Attach to exceptions:page_fault_user tracepoint
 	l, err := link.Tracepoint("exceptions", "page_fault_user", obj.PageFaultUserHandler, nil)
 	if err != nil {
+		_ = obj.Close()
 		logger.Error("failed to attach to page_fault_user tracepoint", zap.Error(err))
 		return nil, err
 	}

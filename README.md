@@ -25,25 +25,33 @@ Spectra attaches lightweight eBPF programs to Linux kernel tracepoints and colle
 # Build
 make
 
-# Trace all processes (default)
+# Use default config.yml
 sudo ./spectra
 
-# Trace a specific PID
-sudo ./spectra -pid 1234
-
-# Selective tracing
-sudo ./spectra -pid 1234 -futex=true -sched-switch=false -page-fault=false -ioctl=false
+# Use a specific config file
+sudo ./spectra -c /path/to/config.yml
+sudo ./spectra --config /path/to/config.yml
 ```
 
 ## Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `-pid` | `0` | PID to trace (`0` = all processes) |
-| `-futex` | `true` | Enable futex wait tracing |
-| `-sched-switch` | `true` | Enable context-switch tracing |
-| `-page-fault` | `true` | Enable page fault tracing |
-| `-ioctl` | `true` | Enable ioctl syscall tracing |
+| `-c` | `config.yml` | Path to config file |
+| `--config` | `config.yml` | Path to config file (alias of `-c`) |
+
+## Configuration
+
+`config.yml` controls the traced PID and enabled tracepoints:
+
+```yaml
+pid: 0
+tracepoints:
+  - futex
+  - sched_switch
+  - page_fault_user
+  - ioctl
+```
 
 ## Project Structure
 

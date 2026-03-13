@@ -37,6 +37,7 @@ func StartTracingFutex(logger *zap.Logger, pid uint32) (*futex, error) {
 	// Attach to sys_enter_futex tracepoint
 	linkEntry, err := link.Tracepoint("syscalls", "sys_enter_futex", obj.FutexEntry, nil)
 	if err != nil {
+		_ = obj.Close()
 		logger.Error("failed to attach to sys_enter_futex tracepoint", zap.Error(err))
 		return nil, err
 	}
@@ -44,6 +45,8 @@ func StartTracingFutex(logger *zap.Logger, pid uint32) (*futex, error) {
 	// Attach to sys_exit_futex tracepoint
 	linkExit, err := link.Tracepoint("syscalls", "sys_exit_futex", obj.FutexExit, nil)
 	if err != nil {
+		_ = linkEntry.Close()
+		_ = obj.Close()
 		logger.Error("failed to attach to sys_exit_futex tracepoint", zap.Error(err))
 		return nil, err
 	}

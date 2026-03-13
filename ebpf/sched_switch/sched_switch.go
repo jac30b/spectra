@@ -36,6 +36,7 @@ func StartTracingSchedSwitch(logger *zap.Logger, pid uint32) (*schedSwitch, erro
 	// Attach to sched:sched_switch tracepoint
 	l, err := link.Tracepoint("sched", "sched_switch", obj.SchedSwitchHandler, nil)
 	if err != nil {
+		_ = obj.Close()
 		logger.Error("failed to attach to sched_switch tracepoint", zap.Error(err))
 		return nil, err
 	}

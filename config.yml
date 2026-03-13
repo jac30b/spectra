@@ -1,0 +1,11 @@
+# Spectra tracer configuration
+# PID to trace (0 = trace all processes)
+# TODO: add name of process that shoud be traced
+pid: 0
+
+# Array of tracepoints to enable
+tracepoints:
+  - futex
+  - sched_switch
+  - page_fault_user
+  - ioctl

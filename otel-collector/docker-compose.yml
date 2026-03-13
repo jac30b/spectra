@@ -1,0 +1,23 @@
+services:
+  otel-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4317:4317"   # gRPC - exposed to host so WSL app can push metrics
+      - "4318:4318"   # HTTP
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge
