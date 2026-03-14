@@ -1,7 +1,9 @@
 # Spectra tracer configuration
-# PID to trace (0 = trace all processes)
-# TODO: add name of process that shoud be traced
+# PID to trace directly (0 = disabled when process_name is set, or trace all when it is empty)
 pid: 0
+
+# process_name is a regular expression matched against executable names; all matches are traced
+process_name: ".*tinygrad.*"
 
 # Array of tracepoints to enable
 tracepoints:
@@ -9,3 +11,4 @@ tracepoints:
   - sched_switch
   - page_fault_user
   - ioctl
+ 

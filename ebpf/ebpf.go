@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"sync/atomic"
 
 	"github.com/jac30b/spectra/ebpf/futex"
 	"github.com/jac30b/spectra/ebpf/ioctl"
-	page_fault "github.com/jac30b/spectra/ebpf/page_fault"
-	sched_switch "github.com/jac30b/spectra/ebpf/sched_switch"
+	"github.com/jac30b/spectra/ebpf/page_fault"
+	"github.com/jac30b/spectra/ebpf/sched_switch"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -71,11 +72,14 @@ func WithTraceIoctl(c bool) Option {
 }
 
 type Tracer struct {
-	fut    Tracepoint[map[uint64]uint64]
-	sched  Tracepoint[map[uint64]uint64]
-	pf     Tracepoint[map[uint64]uint64]
-	ioctl  Tracepoint[map[uint64]uint64]
-	logger *zap.Logger
+	fut     Tracepoint[map[uint64]uint64]
+	sched   Tracepoint[map[uint64]uint64]
+	pf      Tracepoint[map[uint64]uint64]
+	ioctl   Tracepoint[map[uint64]uint64]
+	logger  *zap.Logger
+	options *options
+
+	running atomic.Bool
 }
 
 type loggerOption struct {
@@ -102,50 +106,96 @@ func NewTracer(ctx context.Context, pid uint32, opts ...Option) (*Tracer, error)
 	}
 
 	tr := &Tracer{
-		logger: options.logger,
+		logger:  options.logger,
+		options: options,
 	}
 
-	if options.traceFutex {
-		tp, err := futex.StartTracingFutex(options.logger, pid)
-		if err != nil {
-			return nil, err
-		}
-
-		tr.fut = tp
-	}
-
-	if options.traceSchedSwitch {
-		tp, err := sched_switch.StartTracingSchedSwitch(options.logger, pid)
-		if err != nil {
-			return nil, err
-		}
-
-		tr.sched = tp
-	}
-
-	if options.tracePageFault {
-		tp, err := page_fault.StartTracingPageFault(options.logger, pid)
-		if err != nil {
-			return nil, err
-		}
-
-		tr.pf = tp
-	}
-
-	if options.traceIoctl {
-		tp, err := ioctl.StartTracingIoctl(options.logger, pid)
-		if err != nil {
-			return nil, err
-		}
-
-		tr.ioctl = tp
+	if err := tr.start(pid); err != nil {
+		return nil, err
 	}
 
 	return tr, nil
 }
 
-func (t *Tracer) Pull(ctx context.Context) (PullResponse, error) {
+func (t *Tracer) start(pid uint32) error {
+	var (
+		fut   Tracepoint[map[uint64]uint64]
+		sched Tracepoint[map[uint64]uint64]
+		pf    Tracepoint[map[uint64]uint64]
+		io    Tracepoint[map[uint64]uint64]
+	)
 
+	t.logger.Info("Starting eBPF tracer",
+		zap.Uint32("pid", pid))
+
+	if t.options.traceFutex {
+		tp, err := futex.StartTracingFutex(t.options.logger, pid)
+		if err != nil {
+			return err
+		}
+		fut = tp
+	}
+
+	if t.options.traceSchedSwitch {
+		tp, err := sched_switch.StartTracingSchedSwitch(t.options.logger, pid)
+		if err != nil {
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		sched = tp
+	}
+
+	if t.options.tracePageFault {
+		tp, err := page_fault.StartTracingPageFault(t.options.logger, pid)
+		if err != nil {
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		pf = tp
+	}
+
+	if t.options.traceIoctl {
+		tp, err := ioctl.StartTracingIoctl(t.options.logger, pid)
+		if err != nil {
+			if pf != nil {
+				_ = pf.Stop()
+			}
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		io = tp
+	}
+
+	t.fut = fut
+	t.sched = sched
+	t.pf = pf
+	t.ioctl = io
+	t.running.Store(true)
+	return nil
+}
+
+func (t *Tracer) Restart(pid uint32) error {
+	if t.running.Load() {
+		if err := t.Stop(); err != nil {
+			return err
+		}
+	}
+	return t.start(pid)
+}
+
+func (t *Tracer) Pull(ctx context.Context) (PullResponse, error) {
 	var (
 		errg errgroup.Group
 
@@ -199,5 +249,11 @@ func (t *Tracer) Stop() error {
 	if t.ioctl != nil {
 		err = errors.Join(err, t.ioctl.Stop())
 	}
+
+	t.fut = nil
+	t.sched = nil
+	t.pf = nil
+	t.ioctl = nil
+	t.running.Store(false)
 	return err
 }

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/cilium/ebpf/rlimit"
@@ -15,10 +16,12 @@ import (
 )
 
 type spectra struct {
-	ps       *pubsub.PubSub[string, map[uint64]uint64]
-	tracer   *ebpf.Tracer
-	logger   *zap.Logger
-	exporter *otel.OltpExporter
+	ps         *pubsub.PubSub[string, map[uint64]uint64]
+	reconciler *tracerReconciler
+	logger     *zap.Logger
+	exporter   *otel.OltpExporter
+	config     *Config
+	waiting    bool
 }
 
 func main() {
@@ -56,6 +59,7 @@ func main() {
 
 	logger.Info("Starting spectra tracer",
 		zap.Int("pid", config.PID),
+		zap.String("process_name", config.ProcessName),
 		zap.Strings("tracepoints", config.Tracepoints),
 	)
 
@@ -67,64 +71,92 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracer, err := ebpf.NewTracer(ctx, uint32(config.PID),
-		ebpf.WithLogger(logger),
-		ebpf.WithTraceFutex(config.isTracepointEnabled("futex")),
-		ebpf.WithTraceSchedSwitch(config.isTracepointEnabled("sched_switch")),
-		ebpf.WithTracePageFault(config.isTracepointEnabled("page_fault_user")),
-		ebpf.WithTraceIoctl(config.isTracepointEnabled("ioctl")),
-	)
-	if err != nil {
-		logger.Error("failed to create tracer", zap.Error(err))
-		os.Exit(1)
-	}
-
 	exporter, err := otel.NewOltpExporter(ctx, logger, ps, config.Tracepoints...)
 	if err != nil {
 		logger.Error("failed to create otlp exporter", zap.Error(err))
-		err = tracer.Stop()
-		if err != nil {
-			logger.Error("failed to stop tracer after exporter init error", zap.Error(err))
-		}
 		os.Exit(1)
 	}
 	logger.Debug("otlp exporter initialized")
 	s.exporter = exporter
-	s.tracer = tracer
+	s.config = config
+	s.reconciler = newTracerReconciler(config, logger)
+	if err := s.reconciler.Reconcile(ctx); err != nil {
+		logger.Error("failed to start tracer", zap.Error(err))
+		os.Exit(1)
+	}
+
 	s.run(ctx)
 }
 
 func (s *spectra) run(ctx context.Context) {
 	var (
-		ticker = time.NewTicker(5 * time.Second)
-		stop   = make(chan os.Signal, 1)
+		pullTicker    = time.NewTicker(2 * time.Second)
+		stop          = make(chan os.Signal, 1)
+		reconcileWG   sync.WaitGroup
+		reconcileDone = make(chan struct{})
 	)
-	defer ticker.Stop()
+	defer pullTicker.Stop()
 
 	signal.Notify(stop, os.Interrupt)
 	defer signal.Stop(stop)
 
+	reconcileWG.Add(1)
+	go s.runReconcilation(ctx, &reconcileWG, reconcileDone)
+
 	for {
 		select {
-		case <-ticker.C:
-			res, err := s.tracer.Pull(ctx)
+		case <-pullTicker.C:
+			if s.reconciler.Count() == 0 {
+				if s.config.ProcessName != "" && !s.waiting {
+					s.logger.Info("waiting for matching processes",
+						zap.String("process_name", s.config.ProcessName),
+					)
+					s.waiting = true
+				}
+				continue
+			}
+
+			s.waiting = false
+			res, err := s.reconciler.Pull(ctx)
 			if err != nil {
 				s.logger.Error("failed to pull data", zap.Error(err))
-				continue
 			}
 			s.publish(res)
 		case <-stop:
 			s.logger.Info("received interrupt signal, shutting down")
+			close(reconcileDone)
+			reconcileWG.Wait()
 			err := s.exporter.Close(ctx)
 			if err != nil {
 				s.logger.Error("failed to close exporter", zap.Error(err))
 			}
-			err = s.tracer.Stop()
+			err = s.reconciler.Stop()
 			if err != nil {
-				s.logger.Error("failed to stop tracer", zap.Error(err))
+				s.logger.Error("failed to stop tracers", zap.Error(err))
 			}
 			s.logger.Info("tracer stopped successfully")
 			return
+		}
+	}
+}
+
+func (s *spectra) runReconcilation(ctx context.Context, wg *sync.WaitGroup, exit chan struct{}) {
+	var (
+		reconcileTicker = time.NewTicker(5 * time.Second)
+	)
+	defer wg.Done()
+	defer reconcileTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-exit:
+			return
+		case <-reconcileTicker.C:
+			if err := s.reconciler.Reconcile(ctx); err != nil {
+				s.logger.Error("failed to reconcile tracers", zap.Error(err))
+			}
 		}
 	}
 }

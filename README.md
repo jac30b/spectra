@@ -42,16 +42,24 @@ sudo ./spectra --config /path/to/config.yml
 
 ## Configuration
 
-`config.yml` controls the traced PID and enabled tracepoints:
+`config.yml` controls the traced PIDs and enabled tracepoints:
 
 ```yaml
 pid: 0
+process_name: ".*tinygrad.*"
 tracepoints:
   - futex
   - sched_switch
   - page_fault_user
   - ioctl
 ```
+
+Behavior:
+
+- If `process_name` is empty, Spectra traces `pid` directly.
+- If `pid` is `0` and `process_name` is empty, Spectra traces all processes.
+- If `process_name` is set, Spectra traces every matching process.
+- If `pid` is greater than `0` and `process_name` is also set, Spectra traces that explicit PID plus all regex matches.
 
 ## Project Structure
 
@@ -70,7 +78,7 @@ spectra/
 
 ## TODO
 
-- [ ] Add support for monitoring based on process name
+- [x] Add support for monitoring based on process name
 - [ ] Add support for GPU hardware (CUDA/ROCm ioctl interception)
 - [ ] Export metrics to Prometheus / OpenTelemetry
 - [ ] Add network tracing (TCP retransmits, socket latency)
