@@ -46,42 +46,13 @@ struct
 // target_pid: PID to filter (0 = trace all processes)
 volatile const __u32 target_pid = 0;
 
-// DIAGNOSTIC: Record TGIDs seen before PID filter is applied.
-// Key = tgid, Value = count of events from that tgid.
-// Also stores key=0 with value=target_pid so Go side can read what was set.
-struct
-{
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, __u32);
-    __type(value, __u64);
-    __uint(max_entries, 256);
-} diag_tgids SEC(".maps");
-
 SEC("tracepoint/syscalls/sys_enter_ioctl")
 int ioctl_entry(struct trace_event_raw_sys_enter *ctx)
 {
-    __u32 current_tgid = bpf_get_current_pid_tgid() >> 32;
-
-    // DIAGNOSTIC: Record this TGID before any filtering
-    __u64 *existing = bpf_map_lookup_elem(&diag_tgids, &current_tgid);
-    if (existing)
-    {
-        __sync_fetch_and_add(existing, 1);
-    }
-    else
-    {
-        __u64 one = 1;
-        bpf_map_update_elem(&diag_tgids, &current_tgid, &one, BPF_ANY);
-    }
-
-    // Also record the target_pid value at key=0 for Go-side comparison
-    __u32 zero_key = 0;
-    __u64 tp_val = (__u64)target_pid;
-    bpf_map_update_elem(&diag_tgids, &zero_key, &tp_val, BPF_NOEXIST);
-
     // Check PID filter (TGID = process ID)
     if (target_pid != 0)
     {
+        __u32 current_tgid = bpf_get_current_pid_tgid() >> 32;
         if (current_tgid != target_pid)
         {
             return 0;
