@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/shirou/gopsutil/v3/process"
@@ -64,14 +62,12 @@ func (c *Config) resolveTargetPIDs() ([]uint32, error) {
 		if c.PID <= 0 {
 			return []uint32{uint32(c.PID)}, nil
 		}
-		pids := slices.Collect(maps.Keys(pidCandidates(uint32(c.PID))))
-		slices.Sort(pids)
-		return pids, nil
+		return []uint32{uint32(c.PID)}, nil
 	}
 
 	targets := make(map[uint32]struct{})
 	if c.PID > 0 {
-		maps.Copy(targets, pidCandidates(uint32(c.PID)))
+		targets[uint32(c.PID)] = struct{}{}
 	}
 
 	processes, err := process.Processes()
@@ -81,7 +77,7 @@ func (c *Config) resolveTargetPIDs() ([]uint32, error) {
 
 	for _, proc := range processes {
 		if c.processNameRegex.MatchString(buildProbeString(proc)) {
-			maps.Copy(targets, pidCandidates(uint32(proc.Pid)))
+			targets[uint32(proc.Pid)] = struct{}{}
 		}
 	}
 
@@ -125,42 +121,4 @@ func buildProbeString(proc *process.Process) string {
 	}
 
 	return strings.Join(parts, "\x00")
-}
-
-// pidCandidates returns all PID aliases visible across nested namespaces for a
-// process, so filtering can match whichever PID variant the kernel reports.
-func pidCandidates(pid uint32) map[uint32]struct{} {
-	candidates := map[uint32]struct{}{pid: {}}
-
-	statusPath := fmt.Sprintf("/proc/%d/status", pid)
-	f, err := os.Open(statusPath)
-	if err != nil {
-		return candidates
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "NSpid:\t") && !strings.HasPrefix(line, "NSpid:") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return candidates
-		}
-
-		for _, raw := range fields[1:] {
-			parsed, err := strconv.ParseUint(raw, 10, 32)
-			if err != nil || parsed == 0 {
-				continue
-			}
-			candidates[uint32(parsed)] = struct{}{}
-		}
-
-		return candidates
-	}
-
-	return candidates
 }
