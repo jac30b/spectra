@@ -90,6 +90,26 @@ func (i *ioctlTracer) Pull(ctx context.Context) (map[uint64]uint64, error) {
 		value uint64
 	)
 
+	// DIAGNOSTIC: dump diag_tgids map to see what TGIDs the BPF program sees
+	{
+		var dk uint32
+		var dv uint64
+		diagIter := i.obj.DiagTgids.Iterate()
+		for diagIter.Next(&dk, &dv) {
+			if dk == 0 {
+				i.logger.Info("DIAG: target_pid baked into BPF",
+					zap.Uint64("target_pid_value", dv))
+			} else {
+				i.logger.Info("DIAG: TGID seen by ioctl tracepoint",
+					zap.Uint32("tgid", dk),
+					zap.Uint64("event_count", dv))
+			}
+		}
+		if err := diagIter.Err(); err != nil {
+			i.logger.Warn("DIAG: error iterating diag_tgids", zap.Error(err))
+		}
+	}
+
 	iter := i.obj.IoctlDurationUs.Iterate()
 	for iter.Next(&key, &value) {
 		if value > 0 {

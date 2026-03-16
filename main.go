@@ -121,6 +121,12 @@ func (s *spectra) run(ctx context.Context) {
 			if err != nil {
 				s.logger.Error("failed to pull data", zap.Error(err))
 			}
+			s.logger.Debug("pull result",
+				zap.Int("futex_buckets", len(res.Futex)),
+				zap.Int("sched_switch_buckets", len(res.SchedSwitch)),
+				zap.Int("page_fault_buckets", len(res.PageFault)),
+				zap.Int("ioctl_buckets", len(res.Ioctl)),
+			)
 			s.publish(res)
 		case <-stop:
 			s.logger.Info("received interrupt signal, shutting down")

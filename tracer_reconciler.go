@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/jac30b/spectra/ebpf"
+	"github.com/shirou/gopsutil/v3/process"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -55,7 +56,16 @@ func (r *tracerReconciler) Reconcile(ctx context.Context) error {
 			return err
 		}
 		r.tracers[pid] = tracer
-		r.logger.Info("attached tracer", zap.Uint32("pid", pid))
+
+		fields := []zap.Field{zap.Uint32("pid", pid)}
+		if meta, err := resolveProcessMeta(pid); err == nil {
+			fields = append(fields,
+				zap.String("process_name", meta.name),
+				zap.String("process_exe", meta.exe),
+				zap.String("process_cmdline", meta.cmdline),
+			)
+		}
+		r.logger.Info("attached tracer", fields...)
 	}
 
 	for pid, tracer := range r.tracers {
@@ -147,4 +157,30 @@ func mergeCounts(dst, src map[uint64]uint64) {
 	for bucket, count := range src {
 		dst[bucket] += count
 	}
+}
+
+type processMeta struct {
+	name    string
+	exe     string
+	cmdline string
+}
+
+func resolveProcessMeta(pid uint32) (processMeta, error) {
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return processMeta{}, err
+	}
+
+	meta := processMeta{}
+	if name, err := proc.Name(); err == nil {
+		meta.name = name
+	}
+	if exe, err := proc.Exe(); err == nil {
+		meta.exe = exe
+	}
+	if cmdline, err := proc.Cmdline(); err == nil {
+		meta.cmdline = cmdline
+	}
+
+	return meta, nil
 }

@@ -2,7 +2,7 @@
 # PID to trace directly (0 = disabled when process_name is set, or trace all when it is empty)
 pid: 0
 
-# process_name is a regular expression matched against executable names; all matches are traced
+# process_name is a regular expression matched against the full cmdline of each process; all matches are traced
 process_name: ".*tinygrad.*"
 
 # Array of tracepoints to enable

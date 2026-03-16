@@ -1,0 +1,11 @@
+{
+  "go.useLanguageServer": true,
+  "gopls": {
+    "ui.semanticTokens": true
+  },
+  "[go]": {
+    "editor.semanticHighlighting.enabled": true
+  },
+
+  
+}

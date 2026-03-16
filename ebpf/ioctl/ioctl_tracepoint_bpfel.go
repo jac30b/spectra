@@ -70,6 +70,7 @@ type ioctl_tracepointProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type ioctl_tracepointMapSpecs struct {
+	DiagTgids       *ebpf.MapSpec `ebpf:"diag_tgids"`
 	IoctlDurationUs *ebpf.MapSpec `ebpf:"ioctl_duration_us"`
 	StartTimes      *ebpf.MapSpec `ebpf:"start_times"`
 }
@@ -101,12 +102,14 @@ func (o *ioctl_tracepointObjects) Close() error {
 //
 // It can be passed to loadIoctl_tracepointObjects or ebpf.CollectionSpec.LoadAndAssign.
 type ioctl_tracepointMaps struct {
+	DiagTgids       *ebpf.Map `ebpf:"diag_tgids"`
 	IoctlDurationUs *ebpf.Map `ebpf:"ioctl_duration_us"`
 	StartTimes      *ebpf.Map `ebpf:"start_times"`
 }
 
 func (m *ioctl_tracepointMaps) Close() error {
 	return _Ioctl_tracepointClose(
+		m.DiagTgids,
 		m.IoctlDurationUs,
 		m.StartTimes,
 	)

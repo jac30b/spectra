@@ -58,7 +58,7 @@ Behavior:
 
 - If `process_name` is empty, Spectra traces `pid` directly.
 - If `pid` is `0` and `process_name` is empty, Spectra traces all processes.
-- If `process_name` is set, Spectra traces every matching process.
+- If `process_name` is set, Spectra traces every process whose CWD base directory name matches.
 - If `pid` is greater than `0` and `process_name` is also set, Spectra traces that explicit PID plus all regex matches.
 
 ## Project Structure
