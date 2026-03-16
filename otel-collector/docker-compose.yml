@@ -17,6 +17,13 @@ services:
       - "9090:9090"
     networks:
       - observability
+  
+  greflect:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - observability
 
 networks:
   observability:
