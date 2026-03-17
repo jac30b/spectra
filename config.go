@@ -14,9 +14,10 @@ import (
 )
 
 type Config struct {
-	PID         int      `yaml:"pid"`
-	ProcessName string   `yaml:"process_name"`
-	Tracepoints []string `yaml:"tracepoints"`
+	PID                  int      `yaml:"pid"`
+	ProcessName          string   `yaml:"process_name"`
+	Tracepoints          []string `yaml:"tracepoints"`
+	EnableProcessMonitor bool     `yaml:"enable_process_monitor"`
 
 	tracepoints      map[string]struct{} `yaml:"-"`
 	processNameRegex *regexp.Regexp      `yaml:"-"`

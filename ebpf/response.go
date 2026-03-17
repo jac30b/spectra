@@ -8,6 +8,20 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// ProcessMeta holds metadata about a traced process.
+type ProcessMeta struct {
+	PID     uint32 `json:"pid"`
+	Name    string `json:"name"`
+	Exe     string `json:"exe"`
+	Cmdline string `json:"cmdline"`
+}
+
+// TracepointData wraps tracepoint histogram data with process metadata.
+type TracepointData struct {
+	Data    map[uint64]uint64 `json:"data"`
+	Process ProcessMeta       `json:"process"`
+}
+
 // NewPullResponse creates a PullResponse with all map fields initialized.
 func NewPullResponse() PullResponse {
 	return PullResponse{

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jac30b/spectra/ebpf"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -17,8 +18,8 @@ import (
 )
 
 type PubSub interface {
-	Sub(...string) chan map[uint64]uint64
-	Unsub(chan map[uint64]uint64, ...string)
+	Sub(...string) chan ebpf.TracepointData
+	Unsub(chan ebpf.TracepointData, ...string)
 }
 
 type OltpExporter struct {
@@ -29,7 +30,7 @@ type OltpExporter struct {
 	done          chan struct{}
 	closeOnce     sync.Once
 	wg            sync.WaitGroup
-	handlers      map[string]func(map[uint64]uint64)
+	handlers      map[string]func(ebpf.TracepointData)
 	latestByTopic sync.Map
 	metricsReg    metric.Registration
 	logger        *zap.Logger
@@ -37,7 +38,7 @@ type OltpExporter struct {
 
 type subscription struct {
 	topic string
-	ch    chan map[uint64]uint64
+	ch    chan ebpf.TracepointData
 }
 
 var latencyBucketUpperBoundsUs = []uint64{
@@ -101,7 +102,7 @@ func NewOltpExporter(ctx context.Context, logger *zap.Logger, ps PubSub, topics 
 		mp:       mp,
 		ps:       ps,
 		done:     make(chan struct{}),
-		handlers: make(map[string]func(map[uint64]uint64)),
+		handlers: make(map[string]func(ebpf.TracepointData)),
 		logger:   logger,
 	}
 
@@ -126,7 +127,7 @@ func uniqueTopics(topics []string) []string {
 	return slices.Compact(topics)
 }
 
-func (o *OltpExporter) runSubscription(ctx context.Context, topic string, ch <-chan map[uint64]uint64) {
+func (o *OltpExporter) runSubscription(ctx context.Context, topic string, ch <-chan ebpf.TracepointData) {
 	defer o.wg.Done()
 	o.logger.Debug("starting topic subscription loop", zap.String("topic", topic))
 
@@ -138,26 +139,26 @@ func (o *OltpExporter) runSubscription(ctx context.Context, topic string, ch <-c
 		case <-o.done:
 			o.logger.Debug("stopping topic subscription loop: exporter closing", zap.String("topic", topic))
 			return
-		case data, ok := <-ch:
+		case tpData, ok := <-ch:
 			if !ok {
 				o.logger.Debug("stopping topic subscription loop: channel closed", zap.String("topic", topic))
 				return
 			}
 			o.logger.Debug("received tracepoint payload",
 				zap.String("topic", topic),
-				zap.Int("buckets", len(data)),
+				zap.Int("buckets", len(tpData.Data)),
 			)
-			o.handleMessage(topic, data)
+			o.handleMessage(topic, tpData)
 		}
 	}
 }
 
-func (o *OltpExporter) handleMessage(topic string, data map[uint64]uint64) {
+func (o *OltpExporter) handleMessage(topic string, tpData ebpf.TracepointData) {
 	h, ok := o.handlers[topic]
 	if !ok {
 		return
 	}
-	h(data)
+	h(tpData)
 }
 
 func (o *OltpExporter) initHandlers() error {
@@ -193,17 +194,17 @@ func (o *OltpExporter) initHandlers() error {
 		return err
 	}
 
-	o.handlers["futex"] = func(data map[uint64]uint64) {
-		o.storeLatest("futex", data)
+	o.handlers["futex"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("futex", tpData)
 	}
-	o.handlers["sched_switch"] = func(data map[uint64]uint64) {
-		o.storeLatest("sched_switch", data)
+	o.handlers["sched_switch"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("sched_switch", tpData)
 	}
-	o.handlers["ioctl"] = func(data map[uint64]uint64) {
-		o.storeLatest("ioctl", data)
+	o.handlers["ioctl"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("ioctl", tpData)
 	}
-	o.handlers["page_fault_user"] = func(data map[uint64]uint64) {
-		o.storeLatest("page_fault_user", data)
+	o.handlers["page_fault_user"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("page_fault_user", tpData)
 	}
 	// Allow both names for compatibility.
 	o.handlers["page_fault"] = o.handlers["page_fault_user"]
@@ -222,12 +223,17 @@ func (o *OltpExporter) initHandlers() error {
 	return nil
 }
 
-func (o *OltpExporter) storeLatest(topic string, data map[uint64]uint64) {
-	copied := make(map[uint64]uint64, len(data))
-	for k, v := range data {
+func (o *OltpExporter) storeLatest(topic string, tpData ebpf.TracepointData) {
+	// Copy the data map
+	copied := make(map[uint64]uint64, len(tpData.Data))
+	for k, v := range tpData.Data {
 		copied[k] = v
 	}
-	o.latestByTopic.Store(topic, copied)
+	// Store both data and process metadata
+	o.latestByTopic.Store(topic, ebpf.TracepointData{
+		Data:    copied,
+		Process: tpData.Process,
+	})
 }
 
 func (o *OltpExporter) observeLatency(obs metric.Observer, topic string, counter metric.Int64ObservableCounter) {
@@ -236,19 +242,30 @@ func (o *OltpExporter) observeLatency(obs metric.Observer, topic string, counter
 		return
 	}
 
-	data, ok := v.(map[uint64]uint64)
+	tpData, ok := v.(ebpf.TracepointData)
 	if !ok {
 		return
 	}
 
-	normalized := normalizeLatencyCounts(data)
+	normalized := normalizeLatencyCounts(tpData.Data)
 	for bucketUs, count := range normalized {
-		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(
+		attrs := []attribute.KeyValue{
 			attribute.String("type", "tracepoint"),
 			attribute.String("tracepoint", topic),
 			attribute.String("tracepoint_type", "latency_us"),
 			attribute.String("bucket.us", bucketUs),
-		))
+		}
+		// Add process metadata if available
+		if tpData.Process.PID > 0 {
+			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
+			if tpData.Process.Name != "" {
+				attrs = append(attrs, attribute.String("process.name", tpData.Process.Name))
+			}
+			if tpData.Process.Cmdline != "" {
+				attrs = append(attrs, attribute.String("process.cmdline", tpData.Process.Cmdline))
+			}
+		}
+		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(attrs...))
 	}
 }
 
@@ -276,24 +293,35 @@ func (o *OltpExporter) observePageFault(obs metric.Observer, counter metric.Int6
 		return
 	}
 
-	data, ok := v.(map[uint64]uint64)
+	tpData, ok := v.(ebpf.TracepointData)
 	if !ok {
 		return
 	}
 
-	for bucket, count := range data {
+	for bucket, count := range tpData.Data {
 		bucketType := "error_code"
 		if bucket == 0 {
 			bucketType = "total"
 		}
 
-		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(
+		attrs := []attribute.KeyValue{
 			attribute.String("type", "tracepoint"),
 			attribute.String("tracepoint", "page_fault_user"),
 			attribute.String("tracepoint_type", "count"),
 			attribute.String("bucket.type", bucketType),
 			attribute.String("bucket.code", fmt.Sprintf("%08b", bucket)),
-		))
+		}
+		// Add process metadata if available
+		if tpData.Process.PID > 0 {
+			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
+			if tpData.Process.Name != "" {
+				attrs = append(attrs, attribute.String("process.name", tpData.Process.Name))
+			}
+			if tpData.Process.Cmdline != "" {
+				attrs = append(attrs, attribute.String("process.cmdline", tpData.Process.Cmdline))
+			}
+		}
+		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(attrs...))
 	}
 }
 

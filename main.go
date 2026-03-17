@@ -16,7 +16,7 @@ import (
 )
 
 type spectra struct {
-	ps         *pubsub.PubSub[string, map[uint64]uint64]
+	ps         *pubsub.PubSub[string, ebpf.TracepointData]
 	reconciler *tracerReconciler
 	logger     *zap.Logger
 	exporter   *otel.OltpExporter
@@ -38,7 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ps := pubsub.New[string, map[uint64]uint64](1024)
+	ps := pubsub.New[string, ebpf.TracepointData](1024)
 
 	// Parse command line flags
 	configShortFlag := flag.String("c", "config.yml", "Path to config file")
@@ -85,6 +85,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start process monitor if enabled
+	if config.EnableProcessMonitor {
+		if err := s.reconciler.StartProcessMonitor(ctx); err != nil {
+			logger.Error("failed to start process monitor", zap.Error(err))
+		}
+	}
+
 	s.run(ctx)
 }
 
@@ -117,17 +124,14 @@ func (s *spectra) run(ctx context.Context) {
 			}
 
 			s.waiting = false
-			res, err := s.reconciler.Pull(ctx)
+			perPIDResponses, err := s.reconciler.PullPerPID(ctx)
 			if err != nil {
 				s.logger.Error("failed to pull data", zap.Error(err))
 			}
 			s.logger.Debug("pull result",
-				zap.Int("futex_buckets", len(res.Futex)),
-				zap.Int("sched_switch_buckets", len(res.SchedSwitch)),
-				zap.Int("page_fault_buckets", len(res.PageFault)),
-				zap.Int("ioctl_buckets", len(res.Ioctl)),
+				zap.Int("processes", len(perPIDResponses)),
 			)
-			s.publish(res)
+			s.publishPerPID(perPIDResponses)
 		case <-stop:
 			s.logger.Info("received interrupt signal, shutting down")
 			close(reconcileDone)
@@ -167,36 +171,61 @@ func (s *spectra) runReconcilation(ctx context.Context, wg *sync.WaitGroup, exit
 	}
 }
 
-func (s *spectra) publish(res ebpf.PullResponse) {
-	if len(res.Futex) > 0 {
-		s.logger.Debug("publishing tracepoint payload",
-			zap.String("topic", "futex"),
-			zap.Int("buckets", len(res.Futex)),
-		)
-		s.ps.Pub(res.Futex, "futex")
-	}
+func (s *spectra) publishPerPID(perPIDResponses []PerPIDResponse) {
+	for _, ppr := range perPIDResponses {
+		processMeta := ebpf.ProcessMeta{
+			PID:     ppr.PID,
+			Name:    ppr.Meta.name,
+			Exe:     ppr.Meta.exe,
+			Cmdline: ppr.Meta.cmdline,
+		}
 
-	if len(res.SchedSwitch) > 0 {
-		s.logger.Debug("publishing tracepoint payload",
-			zap.String("topic", "sched_switch"),
-			zap.Int("buckets", len(res.SchedSwitch)),
-		)
-		s.ps.Pub(res.SchedSwitch, "sched_switch")
-	}
+		if len(ppr.Response.Futex) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "futex"),
+				zap.Int("buckets", len(ppr.Response.Futex)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Futex,
+				Process: processMeta,
+			}, "futex")
+		}
 
-	if len(res.PageFault) > 0 {
-		s.logger.Debug("publishing tracepoint payload",
-			zap.String("topic", "page_fault_user"),
-			zap.Int("buckets", len(res.PageFault)),
-		)
-		s.ps.Pub(res.PageFault, "page_fault_user")
-	}
+		if len(ppr.Response.SchedSwitch) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "sched_switch"),
+				zap.Int("buckets", len(ppr.Response.SchedSwitch)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.SchedSwitch,
+				Process: processMeta,
+			}, "sched_switch")
+		}
 
-	if len(res.Ioctl) > 0 {
-		s.logger.Debug("publishing tracepoint payload",
-			zap.String("topic", "ioctl"),
-			zap.Int("buckets", len(res.Ioctl)),
-		)
-		s.ps.Pub(res.Ioctl, "ioctl")
+		if len(ppr.Response.PageFault) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "page_fault_user"),
+				zap.Int("buckets", len(ppr.Response.PageFault)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.PageFault,
+				Process: processMeta,
+			}, "page_fault_user")
+		}
+
+		if len(ppr.Response.Ioctl) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "ioctl"),
+				zap.Int("buckets", len(ppr.Response.Ioctl)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Ioctl,
+				Process: processMeta,
+			}, "ioctl")
+		}
 	}
 }
