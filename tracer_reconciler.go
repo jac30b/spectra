@@ -121,8 +121,6 @@ func (r *tracerReconciler) PullPerPID(ctx context.Context) ([]PerPIDResponse, er
 	)
 
 	for pid, tracer := range tracers {
-		pid := pid
-		tracer := tracer
 		errg.Go(func() error {
 			res, err := tracer.Pull(ctx)
 			if err != nil {

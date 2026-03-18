@@ -29,6 +29,9 @@ func NewPullResponse() PullResponse {
 		SchedSwitch: make(map[uint64]uint64),
 		PageFault:   make(map[uint64]uint64),
 		Ioctl:       make(map[uint64]uint64),
+		Mmap:        make(map[uint64]uint64),
+		Clone3:      make(map[uint64]uint64),
+		Openat:      make(map[uint64]uint64),
 	}
 }
 
@@ -52,6 +55,19 @@ type PullResponse struct {
 	// Ioctl maps latency buckets (μs) to the number of ioctl syscalls that took
 	// that long. High values can point to slow device drivers or kernel modules.
 	Ioctl map[uint64]uint64 `json:"ioctl,omitempty"`
+
+	// Mmap maps latency buckets (μs) to the number of mmap syscalls with PROT_EXEC
+	// that took that long. High values indicate executable memory allocation activity
+	// (e.g., JIT compilation, dynamic code loading).
+	Mmap map[uint64]uint64 `json:"mmap,omitempty"`
+
+	// Clone3 maps count buckets to the number of clone3 syscalls observed.
+	// High counts indicate thread/process creation activity.
+	Clone3 map[uint64]uint64 `json:"clone3,omitempty"`
+
+	// Openat maps filename length buckets to the number of openat syscalls.
+	// Shows file open patterns for library and data loading.
+	Openat map[uint64]uint64 `json:"openat,omitempty"`
 }
 
 // MarshalLogObject implements zapcore.ObjectMarshaler so PullResponse can be
@@ -93,6 +109,9 @@ func (r PullResponse) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	marshalMap("SchedSwitch", r.SchedSwitch)
 	marshalMap("PageFault", r.PageFault)
 	marshalMap("Ioctl", r.Ioctl)
+	marshalMap("Mmap", r.Mmap)
+	marshalMap("Clone3", r.Clone3)
+	marshalMap("Openat", r.Openat)
 
 	return nil
 }
@@ -124,6 +143,12 @@ var sectionThresholds = map[string]thresholds{
 	"PageFault": {warn: 100, crit: 1_000, unit: "count"},
 	// Ioctl duration in μs: >1ms concerning, >10ms high
 	"Ioctl": {warn: 1_000, crit: 10_000, unit: "μs"},
+	// Mmap EXEC duration in μs: >100μs concerning, >1ms high
+	"Mmap": {warn: 100, crit: 1_000, unit: "μs"},
+	// Clone3 counts: >10 concerning, >100 high
+	"Clone3": {warn: 10, crit: 100, unit: "count"},
+	// Openat filename length buckets
+	"Openat": {warn: 100, crit: 1_000, unit: "count"},
 }
 
 func colorForValue(v uint64, t thresholds) string {
@@ -172,6 +197,9 @@ func (r PullResponse) String() string {
 	formatSection("SchedSwitch", r.SchedSwitch)
 	formatSection("PageFault", r.PageFault)
 	formatSection("Ioctl", r.Ioctl)
+	formatSection("Mmap", r.Mmap)
+	formatSection("Clone3", r.Clone3)
+	formatSection("Openat", r.Openat)
 	sb.WriteString(fmt.Sprintf("%s%s╚══════════════════╝%s", colorBold, colorCyan, colorReset))
 
 	return sb.String()

@@ -6,8 +6,11 @@ import (
 	"maps"
 	"sync/atomic"
 
+	"github.com/jac30b/spectra/ebpf/clone3"
 	"github.com/jac30b/spectra/ebpf/futex"
 	"github.com/jac30b/spectra/ebpf/ioctl"
+	"github.com/jac30b/spectra/ebpf/mmap"
+	"github.com/jac30b/spectra/ebpf/openat"
 	"github.com/jac30b/spectra/ebpf/page_fault"
 	"github.com/jac30b/spectra/ebpf/sched_switch"
 	"go.uber.org/zap"
@@ -24,6 +27,9 @@ type options struct {
 	traceSchedSwitch bool
 	tracePageFault   bool
 	traceIoctl       bool
+	traceMmap        bool
+	traceClone3      bool
+	traceOpenat      bool
 	logger           *zap.Logger
 }
 
@@ -71,11 +77,44 @@ func WithTraceIoctl(c bool) Option {
 	return traceIoctlOpt(c)
 }
 
+type traceMmapOpt bool
+
+func (c traceMmapOpt) apply(opts *options) {
+	opts.traceMmap = bool(c)
+}
+
+func WithTraceMmap(c bool) Option {
+	return traceMmapOpt(c)
+}
+
+type traceClone3Opt bool
+
+func (c traceClone3Opt) apply(opts *options) {
+	opts.traceClone3 = bool(c)
+}
+
+func WithTraceClone3(c bool) Option {
+	return traceClone3Opt(c)
+}
+
+type traceOpenatOpt bool
+
+func (c traceOpenatOpt) apply(opts *options) {
+	opts.traceOpenat = bool(c)
+}
+
+func WithTraceOpenat(c bool) Option {
+	return traceOpenatOpt(c)
+}
+
 type Tracer struct {
 	fut     Tracepoint[map[uint64]uint64]
 	sched   Tracepoint[map[uint64]uint64]
 	pf      Tracepoint[map[uint64]uint64]
 	ioctl   Tracepoint[map[uint64]uint64]
+	mmapTp  Tracepoint[map[uint64]uint64]
+	clone3  Tracepoint[map[uint64]uint64]
+	openat  Tracepoint[map[uint64]uint64]
 	logger  *zap.Logger
 	options *options
 
@@ -123,6 +162,9 @@ func (t *Tracer) start(pid uint32) error {
 		sched Tracepoint[map[uint64]uint64]
 		pf    Tracepoint[map[uint64]uint64]
 		io    Tracepoint[map[uint64]uint64]
+		mm    Tracepoint[map[uint64]uint64]
+		cl3   Tracepoint[map[uint64]uint64]
+		open  Tracepoint[map[uint64]uint64]
 	)
 
 	t.logger.Info("Starting eBPF tracer",
@@ -178,10 +220,82 @@ func (t *Tracer) start(pid uint32) error {
 		io = tp
 	}
 
+	if t.options.traceMmap {
+		tp, err := mmap.StartTracingMmap(t.options.logger, pid)
+		if err != nil {
+			if io != nil {
+				_ = io.Stop()
+			}
+			if pf != nil {
+				_ = pf.Stop()
+			}
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		mm = tp
+	}
+
+	if t.options.traceClone3 {
+		tp, err := clone3.StartTracingClone3(t.options.logger, pid)
+		if err != nil {
+			if mm != nil {
+				_ = mm.Stop()
+			}
+			if io != nil {
+				_ = io.Stop()
+			}
+			if pf != nil {
+				_ = pf.Stop()
+			}
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		cl3 = tp
+	}
+
+	if t.options.traceOpenat {
+		tp, err := openat.StartTracingOpenat(t.options.logger, pid)
+		if err != nil {
+			if cl3 != nil {
+				_ = cl3.Stop()
+			}
+			if mm != nil {
+				_ = mm.Stop()
+			}
+			if io != nil {
+				_ = io.Stop()
+			}
+			if pf != nil {
+				_ = pf.Stop()
+			}
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		open = tp
+	}
+
 	t.fut = fut
 	t.sched = sched
 	t.pf = pf
 	t.ioctl = io
+	t.mmapTp = mm
+	t.clone3 = cl3
+	t.openat = open
 	t.running.Store(true)
 	return nil
 }
@@ -228,6 +342,18 @@ func (t *Tracer) Pull(ctx context.Context) (PullResponse, error) {
 		runAsync(t.ioctl, resp.Ioctl)
 	}
 
+	if t.mmapTp != nil {
+		runAsync(t.mmapTp, resp.Mmap)
+	}
+
+	if t.clone3 != nil {
+		runAsync(t.clone3, resp.Clone3)
+	}
+
+	if t.openat != nil {
+		runAsync(t.openat, resp.Openat)
+	}
+
 	if err := errg.Wait(); err != nil {
 		return PullResponse{}, err
 	}
@@ -249,11 +375,23 @@ func (t *Tracer) Stop() error {
 	if t.ioctl != nil {
 		err = errors.Join(err, t.ioctl.Stop())
 	}
+	if t.mmapTp != nil {
+		err = errors.Join(err, t.mmapTp.Stop())
+	}
+	if t.clone3 != nil {
+		err = errors.Join(err, t.clone3.Stop())
+	}
+	if t.openat != nil {
+		err = errors.Join(err, t.openat.Stop())
+	}
 
 	t.fut = nil
 	t.sched = nil
 	t.pf = nil
 	t.ioctl = nil
+	t.mmapTp = nil
+	t.clone3 = nil
+	t.openat = nil
 	t.running.Store(false)
 	return err
 }
