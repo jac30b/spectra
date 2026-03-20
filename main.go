@@ -227,5 +227,41 @@ func (s *spectra) publishPerPID(perPIDResponses []PerPIDResponse) {
 				Process: processMeta,
 			}, "ioctl")
 		}
+
+		if len(ppr.Response.Mmap) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "mmap"),
+				zap.Int("buckets", len(ppr.Response.Mmap)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Mmap,
+				Process: processMeta,
+			}, "mmap")
+		}
+
+		if len(ppr.Response.Clone3) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "clone3"),
+				zap.Int("buckets", len(ppr.Response.Clone3)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Clone3,
+				Process: processMeta,
+			}, "clone3")
+		}
+
+		if len(ppr.Response.Openat) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "openat"),
+				zap.Int("buckets", len(ppr.Response.Openat)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Openat,
+				Process: processMeta,
+			}, "openat")
+		}
 	}
 }

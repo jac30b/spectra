@@ -194,6 +194,30 @@ func (o *OltpExporter) initHandlers() error {
 		return err
 	}
 
+	mmapCounter, err := o.m.Int64ObservableCounter("spectra.mmap.exec.events",
+		metric.WithDescription("Cumulative mmap PROT_EXEC events by latency bucket"),
+		metric.WithUnit("{events}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	clone3Counter, err := o.m.Int64ObservableCounter("spectra.clone3.events",
+		metric.WithDescription("Cumulative clone3 syscall count"),
+		metric.WithUnit("{events}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	openatCounter, err := o.m.Int64ObservableCounter("spectra.openat.events",
+		metric.WithDescription("Cumulative openat events by filename length bucket"),
+		metric.WithUnit("{events}"),
+	)
+	if err != nil {
+		return err
+	}
+
 	o.handlers["futex"] = func(tpData ebpf.TracepointData) {
 		o.storeLatest("futex", tpData)
 	}
@@ -208,14 +232,26 @@ func (o *OltpExporter) initHandlers() error {
 	}
 	// Allow both names for compatibility.
 	o.handlers["page_fault"] = o.handlers["page_fault_user"]
+	o.handlers["mmap"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("mmap", tpData)
+	}
+	o.handlers["clone3"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("clone3", tpData)
+	}
+	o.handlers["openat"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("openat", tpData)
+	}
 
 	o.metricsReg, err = o.m.RegisterCallback(func(ctx context.Context, obs metric.Observer) error {
 		o.observeLatency(obs, "futex", futexCounter)
 		o.observeLatency(obs, "sched_switch", schedCounter)
 		o.observeLatency(obs, "ioctl", ioctlCounter)
+		o.observeLatency(obs, "mmap", mmapCounter)
+		o.observeClone3(obs, clone3Counter)
+		o.observeOpenat(obs, openatCounter)
 		o.observePageFault(obs, pageFaultCounter)
 		return nil
-	}, futexCounter, schedCounter, ioctlCounter, pageFaultCounter)
+	}, futexCounter, schedCounter, ioctlCounter, pageFaultCounter, mmapCounter, clone3Counter, openatCounter)
 	if err != nil {
 		return err
 	}
@@ -310,6 +346,71 @@ func (o *OltpExporter) observePageFault(obs metric.Observer, counter metric.Int6
 			attribute.String("tracepoint_type", "count"),
 			attribute.String("bucket.type", bucketType),
 			attribute.String("bucket.code", fmt.Sprintf("%08b", bucket)),
+		}
+		// Add process metadata if available
+		if tpData.Process.PID > 0 {
+			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
+			if tpData.Process.Name != "" {
+				attrs = append(attrs, attribute.String("process.name", tpData.Process.Name))
+			}
+			if tpData.Process.Cmdline != "" {
+				attrs = append(attrs, attribute.String("process.cmdline", tpData.Process.Cmdline))
+			}
+		}
+		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(attrs...))
+	}
+}
+
+func (o *OltpExporter) observeClone3(obs metric.Observer, counter metric.Int64ObservableCounter) {
+	v, ok := o.latestByTopic.Load("clone3")
+	if !ok {
+		return
+	}
+
+	tpData, ok := v.(ebpf.TracepointData)
+	if !ok {
+		return
+	}
+
+	// clone3 has a single key (0) with the total count
+	for _, count := range tpData.Data {
+		attrs := []attribute.KeyValue{
+			attribute.String("type", "tracepoint"),
+			attribute.String("tracepoint", "clone3"),
+			attribute.String("tracepoint_type", "count"),
+		}
+		// Add process metadata if available
+		if tpData.Process.PID > 0 {
+			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
+			if tpData.Process.Name != "" {
+				attrs = append(attrs, attribute.String("process.name", tpData.Process.Name))
+			}
+			if tpData.Process.Cmdline != "" {
+				attrs = append(attrs, attribute.String("process.cmdline", tpData.Process.Cmdline))
+			}
+		}
+		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(attrs...))
+	}
+}
+
+func (o *OltpExporter) observeOpenat(obs metric.Observer, counter metric.Int64ObservableCounter) {
+	v, ok := o.latestByTopic.Load("openat")
+	if !ok {
+		return
+	}
+
+	tpData, ok := v.(ebpf.TracepointData)
+	if !ok {
+		return
+	}
+
+	// openat buckets by filename length (power of 2 buckets)
+	for lengthBucket, count := range tpData.Data {
+		attrs := []attribute.KeyValue{
+			attribute.String("type", "tracepoint"),
+			attribute.String("tracepoint", "openat"),
+			attribute.String("tracepoint_type", "filename_length"),
+			attribute.String("bucket.length", fmt.Sprintf("%d", lengthBucket)),
 		}
 		// Add process metadata if available
 		if tpData.Process.PID > 0 {

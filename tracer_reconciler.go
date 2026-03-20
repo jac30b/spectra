@@ -270,7 +270,10 @@ func (r *tracerReconciler) newTracer(ctx context.Context, pid uint32) (*ebpf.Tra
 		ebpf.WithTraceFutex(r.config.isTracepointEnabled("futex")),
 		ebpf.WithTraceSchedSwitch(r.config.isTracepointEnabled("sched_switch")),
 		ebpf.WithTracePageFault(r.config.isTracepointEnabled("page_fault_user")),
-		ebpf.WithTraceIoctl(r.config.isTracepointEnabled("ioctl")))
+		ebpf.WithTraceIoctl(r.config.isTracepointEnabled("ioctl")),
+		ebpf.WithTraceMmap(r.config.isTracepointEnabled("mmap")),
+		ebpf.WithTraceClone3(r.config.isTracepointEnabled("clone3")),
+		ebpf.WithTraceOpenat(r.config.isTracepointEnabled("openat")))
 	if err != nil {
 		return nil, err
 	}

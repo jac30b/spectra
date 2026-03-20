@@ -11,6 +11,8 @@ tracepoints:
   - sched_switch
   - page_fault_user
   - ioctl
+  - mmap
+  - clone3
 
 # Enable automatic process discovery via SPECTRA environment variable
 # When enabled, spectra will monitor all process executions and automatically
