@@ -1,8 +1,8 @@
 // go:build ignore
 // +build ignore
 
-#include <bpf/bpf_helpers.h>
 #include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
 #include <linux/mman.h>
 
 // Generic tracepoint format for syscall entry
