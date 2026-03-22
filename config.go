@@ -18,6 +18,7 @@ type Config struct {
 	ProcessName          string   `yaml:"process_name"`
 	Tracepoints          []string `yaml:"tracepoints"`
 	EnableProcessMonitor bool     `yaml:"enable_process_monitor"`
+	LibCudaPath          string   `yaml:"lib_cuda_path"`
 
 	tracepoints      map[string]struct{} `yaml:"-"`
 	processNameRegex *regexp.Regexp      `yaml:"-"`

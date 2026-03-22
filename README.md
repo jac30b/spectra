@@ -12,6 +12,10 @@ Spectra attaches lightweight eBPF programs to Linux kernel tracepoints and colle
 | **SchedSwitch** | Off-CPU time between context switches (μs) |
 | **PageFault** | User-space page fault frequency (count) |
 | **Ioctl** | Device driver / ioctl syscall latency (μs) |
+| **Mmap** | Executable memory mappings latency (μs) |
+| **Clone3** | Process/thread creation frequency (count) |
+| **Openat** | File-open activity by filename length bucket (count) |
+| **Cuda** | `cuMemAlloc` allocation-size histogram (bytes) |
 
 ## Requirements
 
@@ -52,6 +56,13 @@ tracepoints:
   - sched_switch
   - page_fault_user
   - ioctl
+  - mmap
+  - clone3
+  - openat
+  - cuda
+
+# Optional path override for CUDA uprobe attachment target
+lib_cuda_path: "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
 ```
 
 Behavior:

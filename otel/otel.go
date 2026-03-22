@@ -218,6 +218,14 @@ func (o *OltpExporter) initHandlers() error {
 		return err
 	}
 
+	cudaCounter, err := o.m.Int64ObservableCounter("spectra.cuda.mem_alloc.events",
+		metric.WithDescription("Cumulative cuMemAlloc events by allocation size bucket"),
+		metric.WithUnit("{events}"),
+	)
+	if err != nil {
+		return err
+	}
+
 	o.handlers["futex"] = func(tpData ebpf.TracepointData) {
 		o.storeLatest("futex", tpData)
 	}
@@ -241,6 +249,9 @@ func (o *OltpExporter) initHandlers() error {
 	o.handlers["openat"] = func(tpData ebpf.TracepointData) {
 		o.storeLatest("openat", tpData)
 	}
+	o.handlers["cuda"] = func(tpData ebpf.TracepointData) {
+		o.storeLatest("cuda", tpData)
+	}
 
 	o.metricsReg, err = o.m.RegisterCallback(func(ctx context.Context, obs metric.Observer) error {
 		o.observeLatency(obs, "futex", futexCounter)
@@ -249,9 +260,10 @@ func (o *OltpExporter) initHandlers() error {
 		o.observeLatency(obs, "mmap", mmapCounter)
 		o.observeClone3(obs, clone3Counter)
 		o.observeOpenat(obs, openatCounter)
+		o.observeCuda(obs, cudaCounter)
 		o.observePageFault(obs, pageFaultCounter)
 		return nil
-	}, futexCounter, schedCounter, ioctlCounter, pageFaultCounter, mmapCounter, clone3Counter, openatCounter)
+	}, futexCounter, schedCounter, ioctlCounter, pageFaultCounter, mmapCounter, clone3Counter, openatCounter, cudaCounter)
 	if err != nil {
 		return err
 	}
@@ -413,6 +425,37 @@ func (o *OltpExporter) observeOpenat(obs metric.Observer, counter metric.Int64Ob
 			attribute.String("bucket.length", fmt.Sprintf("%d", lengthBucket)),
 		}
 		// Add process metadata if available
+		if tpData.Process.PID > 0 {
+			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
+			if tpData.Process.Name != "" {
+				attrs = append(attrs, attribute.String("process.name", tpData.Process.Name))
+			}
+			if tpData.Process.Cmdline != "" {
+				attrs = append(attrs, attribute.String("process.cmdline", tpData.Process.Cmdline))
+			}
+		}
+		obs.ObserveInt64(counter, int64(count), metric.WithAttributes(attrs...))
+	}
+}
+
+func (o *OltpExporter) observeCuda(obs metric.Observer, counter metric.Int64ObservableCounter) {
+	v, ok := o.latestByTopic.Load("cuda")
+	if !ok {
+		return
+	}
+
+	tpData, ok := v.(ebpf.TracepointData)
+	if !ok {
+		return
+	}
+
+	for allocationSize, count := range tpData.Data {
+		attrs := []attribute.KeyValue{
+			attribute.String("type", "tracepoint"),
+			attribute.String("tracepoint", "cuda"),
+			attribute.String("tracepoint_type", "allocation_size_bytes"),
+			attribute.String("bucket.bytes", fmt.Sprintf("%d", allocationSize)),
+		}
 		if tpData.Process.PID > 0 {
 			attrs = append(attrs, attribute.String("process.pid", fmt.Sprintf("%d", tpData.Process.PID)))
 			if tpData.Process.Name != "" {

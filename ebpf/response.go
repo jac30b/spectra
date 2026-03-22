@@ -32,6 +32,7 @@ func NewPullResponse() PullResponse {
 		Mmap:        make(map[uint64]uint64),
 		Clone3:      make(map[uint64]uint64),
 		Openat:      make(map[uint64]uint64),
+		Cuda:        make(map[uint64]uint64),
 	}
 }
 
@@ -68,6 +69,10 @@ type PullResponse struct {
 	// Openat maps filename length buckets to the number of openat syscalls.
 	// Shows file open patterns for library and data loading.
 	Openat map[uint64]uint64 `json:"openat,omitempty"`
+
+	// Cuda maps allocation sizes to the number of cuMemAlloc calls.
+	// Shows GPU memory allocation patterns.
+	Cuda map[uint64]uint64 `json:"cuda,omitempty"`
 }
 
 // MarshalLogObject implements zapcore.ObjectMarshaler so PullResponse can be
@@ -112,6 +117,7 @@ func (r PullResponse) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	marshalMap("Mmap", r.Mmap)
 	marshalMap("Clone3", r.Clone3)
 	marshalMap("Openat", r.Openat)
+	marshalMap("Cuda", r.Cuda)
 
 	return nil
 }
@@ -149,6 +155,8 @@ var sectionThresholds = map[string]thresholds{
 	"Clone3": {warn: 10, crit: 100, unit: "count"},
 	// Openat filename length buckets
 	"Openat": {warn: 100, crit: 1_000, unit: "count"},
+	// Cuda allocation count buckets
+	"Cuda": {warn: 50, crit: 500, unit: "allocs"},
 }
 
 func colorForValue(v uint64, t thresholds) string {
@@ -200,6 +208,7 @@ func (r PullResponse) String() string {
 	formatSection("Mmap", r.Mmap)
 	formatSection("Clone3", r.Clone3)
 	formatSection("Openat", r.Openat)
+	formatSection("Cuda", r.Cuda)
 	sb.WriteString(fmt.Sprintf("%s%s╚══════════════════╝%s", colorBold, colorCyan, colorReset))
 
 	return sb.String()

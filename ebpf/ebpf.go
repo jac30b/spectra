@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jac30b/spectra/ebpf/clone3"
+	"github.com/jac30b/spectra/ebpf/cuda_trace"
 	"github.com/jac30b/spectra/ebpf/futex"
 	"github.com/jac30b/spectra/ebpf/ioctl"
 	"github.com/jac30b/spectra/ebpf/mmap"
@@ -30,6 +31,8 @@ type options struct {
 	traceMmap        bool
 	traceClone3      bool
 	traceOpenat      bool
+	traceCuda        bool
+	libCudaPath      string
 	logger           *zap.Logger
 }
 
@@ -107,6 +110,26 @@ func WithTraceOpenat(c bool) Option {
 	return traceOpenatOpt(c)
 }
 
+type traceCudaOpt bool
+
+func (c traceCudaOpt) apply(opts *options) {
+	opts.traceCuda = bool(c)
+}
+
+func WithTraceCuda(c bool) Option {
+	return traceCudaOpt(c)
+}
+
+type libCudaPathOpt string
+
+func (p libCudaPathOpt) apply(opts *options) {
+	opts.libCudaPath = string(p)
+}
+
+func WithLibCudaPath(p string) Option {
+	return libCudaPathOpt(p)
+}
+
 type Tracer struct {
 	fut     Tracepoint[map[uint64]uint64]
 	sched   Tracepoint[map[uint64]uint64]
@@ -115,6 +138,7 @@ type Tracer struct {
 	mmapTp  Tracepoint[map[uint64]uint64]
 	clone3  Tracepoint[map[uint64]uint64]
 	openat  Tracepoint[map[uint64]uint64]
+	cuda    Tracepoint[map[uint64]uint64]
 	logger  *zap.Logger
 	options *options
 
@@ -136,8 +160,9 @@ func WithLogger(log *zap.Logger) Option {
 // NewTracer creates a new Tracer with the given options.
 func NewTracer(ctx context.Context, pid uint32, opts ...Option) (*Tracer, error) {
 	options := &options{
-		traceFutex: true,
-		logger:     zap.NewNop(),
+		traceFutex:  true,
+		libCudaPath: "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+		logger:      zap.NewNop(),
 	}
 
 	for _, opt := range opts {
@@ -165,6 +190,7 @@ func (t *Tracer) start(pid uint32) error {
 		mm    Tracepoint[map[uint64]uint64]
 		cl3   Tracepoint[map[uint64]uint64]
 		open  Tracepoint[map[uint64]uint64]
+		cu    Tracepoint[map[uint64]uint64]
 	)
 
 	t.logger.Info("Starting eBPF tracer",
@@ -289,6 +315,35 @@ func (t *Tracer) start(pid uint32) error {
 		open = tp
 	}
 
+	if t.options.traceCuda {
+		tp, err := cuda_trace.StartTracingCudaTrace(t.options.logger, pid, t.options.libCudaPath)
+		if err != nil {
+			if open != nil {
+				_ = open.Stop()
+			}
+			if cl3 != nil {
+				_ = cl3.Stop()
+			}
+			if mm != nil {
+				_ = mm.Stop()
+			}
+			if io != nil {
+				_ = io.Stop()
+			}
+			if pf != nil {
+				_ = pf.Stop()
+			}
+			if sched != nil {
+				_ = sched.Stop()
+			}
+			if fut != nil {
+				_ = fut.Stop()
+			}
+			return err
+		}
+		cu = tp
+	}
+
 	t.fut = fut
 	t.sched = sched
 	t.pf = pf
@@ -296,6 +351,7 @@ func (t *Tracer) start(pid uint32) error {
 	t.mmapTp = mm
 	t.clone3 = cl3
 	t.openat = open
+	t.cuda = cu
 	t.running.Store(true)
 	return nil
 }
@@ -354,6 +410,10 @@ func (t *Tracer) Pull(ctx context.Context) (PullResponse, error) {
 		runAsync(t.openat, resp.Openat)
 	}
 
+	if t.cuda != nil {
+		runAsync(t.cuda, resp.Cuda)
+	}
+
 	if err := errg.Wait(); err != nil {
 		return PullResponse{}, err
 	}
@@ -384,6 +444,9 @@ func (t *Tracer) Stop() error {
 	if t.openat != nil {
 		err = errors.Join(err, t.openat.Stop())
 	}
+	if t.cuda != nil {
+		err = errors.Join(err, t.cuda.Stop())
+	}
 
 	t.fut = nil
 	t.sched = nil
@@ -392,6 +455,7 @@ func (t *Tracer) Stop() error {
 	t.mmapTp = nil
 	t.clone3 = nil
 	t.openat = nil
+	t.cuda = nil
 	t.running.Store(false)
 	return err
 }

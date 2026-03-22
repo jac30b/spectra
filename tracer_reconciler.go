@@ -108,6 +108,10 @@ func (r *tracerReconciler) Pull(ctx context.Context) (ebpf.PullResponse, error) 
 		mergeCounts(resp.SchedSwitch, ppr.Response.SchedSwitch)
 		mergeCounts(resp.PageFault, ppr.Response.PageFault)
 		mergeCounts(resp.Ioctl, ppr.Response.Ioctl)
+		mergeCounts(resp.Mmap, ppr.Response.Mmap)
+		mergeCounts(resp.Clone3, ppr.Response.Clone3)
+		mergeCounts(resp.Openat, ppr.Response.Openat)
+		mergeCounts(resp.Cuda, ppr.Response.Cuda)
 	}
 
 	return resp, nil
@@ -265,7 +269,7 @@ func (r *tracerReconciler) Stop() error {
 }
 
 func (r *tracerReconciler) newTracer(ctx context.Context, pid uint32) (*ebpf.Tracer, error) {
-	tracer, err := ebpf.NewTracer(ctx, pid,
+	opts := []ebpf.Option{
 		ebpf.WithLogger(r.logger),
 		ebpf.WithTraceFutex(r.config.isTracepointEnabled("futex")),
 		ebpf.WithTraceSchedSwitch(r.config.isTracepointEnabled("sched_switch")),
@@ -273,7 +277,15 @@ func (r *tracerReconciler) newTracer(ctx context.Context, pid uint32) (*ebpf.Tra
 		ebpf.WithTraceIoctl(r.config.isTracepointEnabled("ioctl")),
 		ebpf.WithTraceMmap(r.config.isTracepointEnabled("mmap")),
 		ebpf.WithTraceClone3(r.config.isTracepointEnabled("clone3")),
-		ebpf.WithTraceOpenat(r.config.isTracepointEnabled("openat")))
+		ebpf.WithTraceOpenat(r.config.isTracepointEnabled("openat")),
+		ebpf.WithTraceCuda(r.config.isTracepointEnabled("cuda")),
+	}
+
+	if r.config.LibCudaPath != "" {
+		opts = append(opts, ebpf.WithLibCudaPath(r.config.LibCudaPath))
+	}
+
+	tracer, err := ebpf.NewTracer(ctx, pid, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,11 @@ tracepoints:
   - ioctl
   - mmap
   - clone3
+  - openat
+  - cuda
+
+# Optional override for libcuda path used by CUDA uprobe/uretprobe tracing.
+# lib_cuda_path: "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
 
 # Enable automatic process discovery via SPECTRA environment variable
 # When enabled, spectra will monitor all process executions and automatically

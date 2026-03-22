@@ -263,5 +263,17 @@ func (s *spectra) publishPerPID(perPIDResponses []PerPIDResponse) {
 				Process: processMeta,
 			}, "openat")
 		}
+
+		if len(ppr.Response.Cuda) > 0 {
+			s.logger.Debug("publishing tracepoint payload",
+				zap.String("topic", "cuda"),
+				zap.Int("buckets", len(ppr.Response.Cuda)),
+				zap.Uint32("pid", ppr.PID),
+			)
+			s.ps.Pub(ebpf.TracepointData{
+				Data:    ppr.Response.Cuda,
+				Process: processMeta,
+			}, "cuda")
+		}
 	}
 }
