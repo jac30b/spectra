@@ -64,12 +64,16 @@ var latencyBucketUpperBoundsUs = []uint64{
 	1_000_000,
 }
 
-func initMeterProvider(ctx context.Context) (*sdkmetric.MeterProvider, error) {
+func initMeterProvider(ctx context.Context, collectorEndpoint string) (*sdkmetric.MeterProvider, error) {
+	var opts []otlpmetricgrpc.Option
+	if collectorEndpoint != "" {
+		opts = append(opts, otlpmetricgrpc.WithEndpoint(collectorEndpoint))
+	} else {
+		opts = append(opts, otlpmetricgrpc.WithInsecure()) // no TLS for local dev
+	}
+
 	// Create the gRPC exporter (defaults to localhost:4317)
-	exporter, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithInsecure(), // no TLS for local dev
-		// otlpmetricgrpc.WithEndpoint("otel-collector:4317"),
-	)
+	exporter, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -84,10 +88,10 @@ func initMeterProvider(ctx context.Context) (*sdkmetric.MeterProvider, error) {
 	return mp, nil
 }
 
-func NewOltpExporter(ctx context.Context, logger *zap.Logger, ps PubSub, topics ...string) (*OltpExporter, error) {
+func NewOltpExporter(ctx context.Context, logger *zap.Logger, collectorEndpoint string, ps PubSub, topics ...string) (*OltpExporter, error) {
 	logger.Debug("initializing otlp metric exporter")
 
-	mp, err := initMeterProvider(ctx)
+	mp, err := initMeterProvider(ctx, collectorEndpoint)
 	if err != nil {
 		logger.Error("failed to initialize otlp metric exporter", zap.Error(err))
 		return nil, err

@@ -71,7 +71,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	exporter, err := otel.NewOltpExporter(ctx, logger, ps, config.Tracepoints...)
+	exporter, err := otel.NewOltpExporter(ctx, logger, config.CollectorEndpoint, ps, config.Tracepoints...)
 	if err != nil {
 		logger.Error("failed to create otlp exporter", zap.Error(err))
 		os.Exit(1)
