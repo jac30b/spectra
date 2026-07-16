@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,8 +14,18 @@ import (
 	"github.com/cskr/pubsub/v2"
 	"github.com/jac30b/spectra/ebpf"
 	"github.com/jac30b/spectra/otel"
+	"github.com/jac30b/spectra/vllm"
 	"go.uber.org/zap"
 )
+
+const vllmScrapeInterval = 2 * time.Second
+
+type recordConfig struct {
+	PID           int
+	PrometheusURL string
+	Duration      time.Duration
+	Output        string
+}
 
 type spectra struct {
 	ps         *pubsub.PubSub[string, ebpf.TracepointData]
@@ -32,6 +44,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Sync()
+
+	if len(os.Args) > 1 && os.Args[1] == "record" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+
+		if err := runRecord(ctx, logger, os.Args[2:]); errors.Is(err, flag.ErrHelp) {
+			return
+		} else if err != nil {
+			logger.Error("recording failed", zap.Error(err))
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := rlimit.RemoveMemlock(); err != nil {
 		logger.Error("failed to remove memlock rlimit", zap.Error(err))
@@ -93,6 +118,85 @@ func main() {
 	}
 
 	s.run(ctx)
+}
+
+func parseRecordConfig(args []string) (*recordConfig, error) {
+	config := &recordConfig{}
+	flags := flag.NewFlagSet("record", flag.ContinueOnError)
+	flags.IntVar(&config.PID, "pid", 0, "PID to record (reserved for future use)")
+	flags.StringVar(&config.PrometheusURL, "prometheus-url", vllm.DefaultEndpoint, "Prometheus metrics endpoint")
+	flags.DurationVar(&config.Duration, "duration", 120*time.Second, "Recording duration")
+	flags.StringVar(&config.Output, "output", "", "Output file (reserved for future use)")
+
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	if flags.NArg() != 0 {
+		return nil, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if config.Duration <= 0 {
+		return nil, fmt.Errorf("duration must be greater than zero")
+	}
+
+	return config, nil
+}
+
+func runRecord(ctx context.Context, logger *zap.Logger, args []string) error {
+	config, err := parseRecordConfig(args)
+	if err != nil {
+		return err
+	}
+
+	client, err := vllm.NewClient(config.PrometheusURL)
+	if err != nil {
+		return err
+	}
+
+	recordCtx, cancel := context.WithTimeout(ctx, config.Duration)
+	defer cancel()
+
+	logger.Info("recording vLLM metrics",
+		zap.String("prometheus_url", config.PrometheusURL),
+		zap.Duration("duration", config.Duration),
+	)
+
+	scrape := func() error {
+		families, err := client.Scrape(recordCtx)
+		if err != nil {
+			return err
+		}
+
+		return vllm.PrintSelectedMetrics(os.Stdout, families)
+	}
+
+	if err := scrape(); err != nil {
+		if recordCtx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+
+	ticker := time.NewTicker(vllmScrapeInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-recordCtx.Done():
+			if errors.Is(recordCtx.Err(), context.DeadlineExceeded) {
+				logger.Info("recording duration elapsed")
+			} else {
+				logger.Info("recording interrupted")
+			}
+			return nil
+		case <-ticker.C:
+			if err := scrape(); err != nil {
+				if recordCtx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+		}
+	}
 }
 
 func (s *spectra) run(ctx context.Context) {
