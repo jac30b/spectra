@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
+	"google.golang.org/protobuf/proto"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -185,5 +186,46 @@ func TestPrintSelectedMetrics(t *testing.T) {
 	}
 	if strings.Contains(got, "vllm:request_success_total") {
 		t.Errorf("PrintSelectedMetrics() included an unselected metric:\n%s", got)
+	}
+}
+
+func TestVLLMScrapeStoresSelectedMetricHistory(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/plain; version=0.0.4"}},
+			Body:       io.NopCloser(strings.NewReader(testMetrics)),
+		}, nil
+	})}
+
+	collector, err := NewVLLM("http://vllm.test/metrics", WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("NewVLLM() error = %v", err)
+	}
+	if _, err := collector.Scrape(context.Background()); err != nil {
+		t.Fatalf("first Scrape() error = %v", err)
+	}
+	if _, err := collector.Scrape(context.Background()); err != nil {
+		t.Fatalf("second Scrape() error = %v", err)
+	}
+
+	history := collector.History("vllm:num_requests_running")
+	if len(history) != 2 {
+		t.Fatalf("running request history length = %d, want 2", len(history))
+	}
+	if history[0].CapturedAt.IsZero() || history[0].Family.GetMetric()[0].GetGauge().GetValue() != 2 {
+		t.Errorf("unexpected stored snapshot: %#v", history[0])
+	}
+
+	history[0].Family.Metric[0].Gauge.Value = proto.Float64(99)
+	freshHistory := collector.History("vllm:num_requests_running")
+	if got := freshHistory[0].Family.GetMetric()[0].GetGauge().GetValue(); got != 2 {
+		t.Errorf("mutating returned history changed stored value to %v", got)
+	}
+
+	all := collector.Histories()
+	if _, ok := all["vllm:request_success_total"]; ok {
+		t.Error("stored unselected request_success_total history")
 	}
 }

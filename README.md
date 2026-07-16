@@ -35,7 +35,20 @@ sudo ./spectra
 # Use a specific config file
 sudo ./spectra -c /path/to/config.yml
 sudo ./spectra --config /path/to/config.yml
+
+# Scrape vLLM Prometheus metrics for two minutes
+./spectra record \
+  --pid 1234 \
+  --prometheus-url http://localhost:8000/metrics \
+  --duration 120s \
+  --output run.spectra
 ```
+
+The `record` command currently fetches and parses vLLM metrics every two
+seconds. `--pid` and `--output` are accepted as placeholders and are not used
+yet. Each scrape prints the parsed Prometheus metric families to standard
+output for request timing, queue/prefill/decode time, running/waiting requests,
+KV-cache utilization, prompt/generation token counts, and throughput.
 
 ## Flags
 

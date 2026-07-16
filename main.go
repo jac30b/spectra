@@ -147,7 +147,7 @@ func runRecord(ctx context.Context, logger *zap.Logger, args []string) error {
 		return err
 	}
 
-	client, err := vllm.NewClient(config.PrometheusURL)
+	client, err := vllm.NewVLLM(config.PrometheusURL)
 	if err != nil {
 		return err
 	}

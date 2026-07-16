@@ -163,24 +163,45 @@ var selectedMetricGroups = [][]string{
 	{"vllm:avg_generation_throughput_toks_per_s"},
 }
 
+type selectedMetricFamily struct {
+	name   string
+	family *dto.MetricFamily
+}
+
 // PrintSelectedMetrics writes only the vLLM metric families shown by the
 // record command. For names that changed between vLLM versions, it prints the
 // first available family in the compatibility group.
 func PrintSelectedMetrics(writer io.Writer, families MetricFamilies) error {
 	encoder := expfmt.NewEncoder(writer, expfmt.NewFormat(expfmt.TypeTextPlain))
+	for _, selected := range selectedFamiliesInOrder(families) {
+		if err := encoder.Encode(selected.family); err != nil {
+			return fmt.Errorf("print metric family %q: %w", selected.name, err)
+		}
+	}
+	return nil
+}
+
+func selectedFamilies(families MetricFamilies) MetricFamilies {
+	selected := make(MetricFamilies)
+	for _, entry := range selectedFamiliesInOrder(families) {
+		selected[entry.name] = entry.family
+	}
+	return selected
+}
+
+func selectedFamiliesInOrder(families MetricFamilies) []selectedMetricFamily {
+	selected := make([]selectedMetricFamily, 0, len(selectedMetricGroups))
 	for _, names := range selectedMetricGroups {
 		for _, name := range names {
 			family, ok := families[name]
 			if !ok {
 				continue
 			}
-			if err := encoder.Encode(family); err != nil {
-				return fmt.Errorf("print metric family %q: %w", name, err)
-			}
+			selected = append(selected, selectedMetricFamily{name: name, family: family})
 			break
 		}
 	}
-	return nil
+	return selected
 }
 
 func parse(reader io.Reader, format expfmt.Format) (MetricFamilies, error) {
