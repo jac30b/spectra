@@ -161,12 +161,11 @@ func runRecord(ctx context.Context, logger *zap.Logger, args []string) error {
 	)
 
 	scrape := func() error {
-		families, err := client.Scrape(recordCtx)
-		if err != nil {
+		if _, err := client.Scrape(recordCtx); err != nil {
 			return err
 		}
 
-		return vllm.PrintSelectedMetrics(os.Stdout, families)
+		return client.PrintSelectedMetrics(os.Stdout)
 	}
 
 	if err := scrape(); err != nil {

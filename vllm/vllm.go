@@ -2,10 +2,13 @@ package vllm
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -79,6 +82,26 @@ func (v *VLLM) Histories() map[string][]MetricSnapshot {
 	return histories
 }
 
+// PrintSelectedMetrics writes the latest stored snapshot of each selected
+// family in Prometheus text exposition format. Printed samples use the local
+// scrape timestamp captured with the snapshot.
+func (v *VLLM) PrintSelectedMetrics(writer io.Writer) error {
+	snapshots := v.latestSelectedSnapshots()
+	encoder := expfmt.NewEncoder(writer, expfmt.NewFormat(expfmt.TypeTextPlain))
+
+	for _, snapshot := range snapshots {
+		family := cloneMetricFamily(snapshot.Family)
+		for _, metric := range family.GetMetric() {
+			metric.TimestampMs = proto.Int64(snapshot.CapturedAt.UnixMilli())
+		}
+		if err := encoder.Encode(family); err != nil {
+			return fmt.Errorf("print metric family %q: %w", family.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
 func (v *VLLM) store(capturedAt time.Time, families MetricFamilies) {
 	v.metrics.mu.Lock()
 	defer v.metrics.mu.Unlock()
@@ -89,6 +112,28 @@ func (v *VLLM) store(capturedAt time.Time, families MetricFamilies) {
 			Family:     cloneMetricFamily(family),
 		})
 	}
+}
+
+func (v *VLLM) latestSelectedSnapshots() []MetricSnapshot {
+	v.metrics.mu.RLock()
+	defer v.metrics.mu.RUnlock()
+
+	snapshots := make([]MetricSnapshot, 0, len(selectedMetricGroups))
+	for _, names := range selectedMetricGroups {
+		for _, name := range names {
+			history := v.metrics.history[name]
+			if len(history) == 0 {
+				continue
+			}
+			latest := history[len(history)-1]
+			snapshots = append(snapshots, MetricSnapshot{
+				CapturedAt: latest.CapturedAt,
+				Family:     cloneMetricFamily(latest.Family),
+			})
+			break
+		}
+	}
+	return snapshots
 }
 
 func cloneSnapshots(snapshots []MetricSnapshot) []MetricSnapshot {

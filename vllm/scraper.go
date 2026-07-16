@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -129,24 +128,6 @@ func Parse(reader io.Reader) (MetricFamilies, error) {
 	return parse(reader, expfmt.NewFormat(expfmt.TypeTextPlain))
 }
 
-// PrintMetricFamilies writes metric families in Prometheus text exposition
-// format. Families are sorted by name for stable output.
-func PrintMetricFamilies(writer io.Writer, families MetricFamilies) error {
-	names := make([]string, 0, len(families))
-	for name := range families {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	encoder := expfmt.NewEncoder(writer, expfmt.NewFormat(expfmt.TypeTextPlain))
-	for _, name := range names {
-		if err := encoder.Encode(families[name]); err != nil {
-			return fmt.Errorf("print metric family %q: %w", name, err)
-		}
-	}
-	return nil
-}
-
 var selectedMetricGroups = [][]string{
 	{"vllm:time_to_first_token_seconds"},
 	{"vllm:inter_token_latency_seconds", "vllm:time_per_output_token_seconds"},
@@ -166,19 +147,6 @@ var selectedMetricGroups = [][]string{
 type selectedMetricFamily struct {
 	name   string
 	family *dto.MetricFamily
-}
-
-// PrintSelectedMetrics writes only the vLLM metric families shown by the
-// record command. For names that changed between vLLM versions, it prints the
-// first available family in the compatibility group.
-func PrintSelectedMetrics(writer io.Writer, families MetricFamilies) error {
-	encoder := expfmt.NewEncoder(writer, expfmt.NewFormat(expfmt.TypeTextPlain))
-	for _, selected := range selectedFamiliesInOrder(families) {
-		if err := encoder.Encode(selected.family); err != nil {
-			return fmt.Errorf("print metric family %q: %w", selected.name, err)
-		}
-	}
-	return nil
 }
 
 func selectedFamilies(families MetricFamilies) MetricFamilies {

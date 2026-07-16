@@ -1,12 +1,12 @@
 package vllm
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"google.golang.org/protobuf/proto"
@@ -141,37 +141,18 @@ func TestNewClientRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
-func TestPrintMetricFamilies(t *testing.T) {
-	families, err := Parse(strings.NewReader(testMetrics))
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-
-	var output bytes.Buffer
-	if err := PrintMetricFamilies(&output, families); err != nil {
-		t.Fatalf("PrintMetricFamilies() error = %v", err)
-	}
-
-	got := output.String()
-	for _, want := range []string{
-		"# TYPE vllm:num_requests_running gauge",
-		"vllm:num_requests_running{model_name=\"test-model\"} 2",
-		"# TYPE vllm:time_to_first_token_seconds histogram",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("PrintMetricFamilies() output missing %q:\n%s", want, got)
-		}
-	}
-}
-
 func TestPrintSelectedMetrics(t *testing.T) {
 	families, err := Parse(strings.NewReader(testMetrics))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
 
-	var output bytes.Buffer
-	if err := PrintSelectedMetrics(&output, families); err != nil {
+	collector := &VLLM{metrics: storedMetrics{history: make(map[string][]MetricSnapshot)}}
+	capturedAt := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	collector.store(capturedAt, families)
+
+	var output strings.Builder
+	if err := collector.PrintSelectedMetrics(&output); err != nil {
 		t.Fatalf("PrintSelectedMetrics() error = %v", err)
 	}
 
@@ -179,6 +160,7 @@ func TestPrintSelectedMetrics(t *testing.T) {
 	for _, want := range []string{
 		"vllm:num_requests_running{model_name=\"test-model\"} 2",
 		"vllm:time_to_first_token_seconds_sum{model_name=\"test-model\"} 0.7",
+		"1784289600000",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PrintSelectedMetrics() output missing %q:\n%s", want, got)
