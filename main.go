@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cilium/ebpf/rlimit"
 	"github.com/cskr/pubsub/v2"
 	"github.com/jac30b/spectra/ebpf"
 	"github.com/jac30b/spectra/otel"
@@ -58,7 +57,7 @@ func main() {
 		return
 	}
 
-	if err := rlimit.RemoveMemlock(); err != nil {
+	if err := removeMemlock(); err != nil {
 		logger.Error("failed to remove memlock rlimit", zap.Error(err))
 		os.Exit(1)
 	}

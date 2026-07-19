@@ -1,3 +1,5 @@
+//go:build linux
+
 package clone3
 
 import (

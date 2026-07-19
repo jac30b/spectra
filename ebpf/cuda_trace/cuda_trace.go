@@ -1,3 +1,5 @@
+//go:build linux
+
 package cuda_trace
 
 import (

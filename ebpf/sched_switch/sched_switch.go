@@ -1,3 +1,5 @@
+//go:build linux
+
 package sched_switch
 
 import (
