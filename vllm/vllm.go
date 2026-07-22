@@ -22,6 +22,7 @@ type storedMetrics struct {
 // histogram buckets where applicable.
 type MetricSnapshot struct {
 	CapturedAt time.Time
+	Definition MetricDefinition
 	Family     *dto.MetricFamily
 }
 
@@ -106,10 +107,11 @@ func (v *VLLM) store(capturedAt time.Time, families MetricFamilies) {
 	v.metrics.mu.Lock()
 	defer v.metrics.mu.Unlock()
 
-	for name, family := range selectedFamilies(families) {
-		v.metrics.history[name] = append(v.metrics.history[name], MetricSnapshot{
+	for f := range scanSelectedFamilies(families) {
+		v.metrics.history[f.name] = append(v.metrics.history[f.name], MetricSnapshot{
 			CapturedAt: capturedAt,
-			Family:     cloneMetricFamily(family),
+			Definition: cloneMetricDefinition(f.definition),
+			Family:     cloneMetricFamily(f.family),
 		})
 	}
 }
@@ -119,8 +121,8 @@ func (v *VLLM) latestSelectedSnapshots() []MetricSnapshot {
 	defer v.metrics.mu.RUnlock()
 
 	snapshots := make([]MetricSnapshot, 0, len(selectedMetricGroups))
-	for _, names := range selectedMetricGroups {
-		for _, name := range names {
+	for _, definition := range selectedMetricGroups {
+		for _, name := range definition.Names {
 			history := v.metrics.history[name]
 			if len(history) == 0 {
 				continue
@@ -128,6 +130,7 @@ func (v *VLLM) latestSelectedSnapshots() []MetricSnapshot {
 			latest := history[len(history)-1]
 			snapshots = append(snapshots, MetricSnapshot{
 				CapturedAt: latest.CapturedAt,
+				Definition: cloneMetricDefinition(latest.Definition),
 				Family:     cloneMetricFamily(latest.Family),
 			})
 			break
@@ -141,10 +144,16 @@ func cloneSnapshots(snapshots []MetricSnapshot) []MetricSnapshot {
 	for i, snapshot := range snapshots {
 		clones[i] = MetricSnapshot{
 			CapturedAt: snapshot.CapturedAt,
+			Definition: cloneMetricDefinition(snapshot.Definition),
 			Family:     cloneMetricFamily(snapshot.Family),
 		}
 	}
 	return clones
+}
+
+func cloneMetricDefinition(definition MetricDefinition) MetricDefinition {
+	definition.Names = append([]string(nil), definition.Names...)
+	return definition
 }
 
 func cloneMetricFamily(family *dto.MetricFamily) *dto.MetricFamily {

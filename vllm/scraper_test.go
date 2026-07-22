@@ -32,6 +32,26 @@ vllm:time_to_first_token_seconds_sum{model_name="test-model"} 0.7
 vllm:time_to_first_token_seconds_count{model_name="test-model"} 5
 `
 
+const aliasMetrics = `# HELP vllm:kv_cache_usage_perc KV cache usage.
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{model_name="test-model"} 0.42
+# HELP vllm:gpu_cache_usage_perc GPU cache usage.
+# TYPE vllm:gpu_cache_usage_perc gauge
+vllm:gpu_cache_usage_perc{model_name="test-model"} 0.43
+# HELP vllm:inter_token_latency_seconds Inter-token latency.
+# TYPE vllm:inter_token_latency_seconds histogram
+vllm:inter_token_latency_seconds_bucket{le="0.1",model_name="test-model"} 4
+vllm:inter_token_latency_seconds_bucket{le="+Inf",model_name="test-model"} 4
+vllm:inter_token_latency_seconds_sum{model_name="test-model"} 0.2
+vllm:inter_token_latency_seconds_count{model_name="test-model"} 4
+# HELP vllm:time_per_output_token_seconds Time per output token.
+# TYPE vllm:time_per_output_token_seconds histogram
+vllm:time_per_output_token_seconds_bucket{le="0.1",model_name="test-model"} 5
+vllm:time_per_output_token_seconds_bucket{le="+Inf",model_name="test-model"} 5
+vllm:time_per_output_token_seconds_sum{model_name="test-model"} 0.3
+vllm:time_per_output_token_seconds_count{model_name="test-model"} 5
+`
+
 func TestParse(t *testing.T) {
 	families, err := Parse(strings.NewReader(testMetrics))
 	if err != nil {
@@ -141,6 +161,61 @@ func TestNewClientRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
+func TestSelectedMetricDefinition(t *testing.T) {
+	definition, ok := selectedMetricDefinition("vllm:time_to_first_token_seconds")
+	if !ok {
+		t.Fatal("selectedMetricDefinition() ok = false, want true")
+	}
+	if definition.ID != "ttft" ||
+		definition.Kind != MetricKindHistogram ||
+		definition.Aggregation != AggregationP95 ||
+		definition.Unit != MetricUnitSeconds ||
+		!definition.HigherIsWorse {
+		t.Fatalf("unexpected TTFT definition: %#v", definition)
+	}
+
+	cacheDefinition, ok := selectedMetricDefinition("vllm:gpu_cache_usage_perc")
+	if !ok {
+		t.Fatal("selectedMetricDefinition() for gpu cache ok = false, want true")
+	}
+	if cacheDefinition.ID != "cache_usage" ||
+		cacheDefinition.Kind != MetricKindGauge ||
+		cacheDefinition.Aggregation != AggregationAverage ||
+		cacheDefinition.Unit != MetricUnitPercent ||
+		!cacheDefinition.containsName("vllm:kv_cache_usage_perc") {
+		t.Fatalf("unexpected cache definition: %#v", cacheDefinition)
+	}
+
+	if _, ok := selectedMetricDefinition("vllm:request_success_total"); ok {
+		t.Fatal("selectedMetricDefinition() for unselected metric ok = true, want false")
+	}
+}
+
+func TestScanSelectedFamiliesIncludesMetadata(t *testing.T) {
+	families, err := Parse(strings.NewReader(testMetrics))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	selected := make(map[string]selectedMetricFamily)
+	for family := range scanSelectedFamilies(families) {
+		selected[family.name] = family
+	}
+
+	running, ok := selected["vllm:num_requests_running"]
+	if !ok {
+		t.Fatal("scanSelectedFamilies() missing num_requests_running")
+	}
+	if running.definition.ID != "requests_running" ||
+		running.definition.Kind != MetricKindGauge ||
+		running.definition.Aggregation != AggregationAverage {
+		t.Fatalf("unexpected running requests metadata: %#v", running.definition)
+	}
+	if _, ok := selected["vllm:request_success_total"]; ok {
+		t.Fatal("scanSelectedFamilies() included unselected request_success_total")
+	}
+}
+
 func TestPrintSelectedMetrics(t *testing.T) {
 	families, err := Parse(strings.NewReader(testMetrics))
 	if err != nil {
@@ -168,6 +243,65 @@ func TestPrintSelectedMetrics(t *testing.T) {
 	}
 	if strings.Contains(got, "vllm:request_success_total") {
 		t.Errorf("PrintSelectedMetrics() included an unselected metric:\n%s", got)
+	}
+}
+
+func TestStoreKeepsBothSelectedAliases(t *testing.T) {
+	families, err := Parse(strings.NewReader(aliasMetrics))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	collector := &VLLM{metrics: storedMetrics{history: make(map[string][]MetricSnapshot)}}
+	capturedAt := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	collector.store(capturedAt, families)
+
+	for _, name := range []string{
+		"vllm:kv_cache_usage_perc",
+		"vllm:gpu_cache_usage_perc",
+		"vllm:inter_token_latency_seconds",
+		"vllm:time_per_output_token_seconds",
+	} {
+		history := collector.History(name)
+		if len(history) != 1 {
+			t.Fatalf("%s history length = %d, want 1", name, len(history))
+		}
+		if history[0].Definition.ID == "" {
+			t.Fatalf("%s stored empty metric definition", name)
+		}
+	}
+}
+
+func TestPrintSelectedMetricsUsesPreferredAlias(t *testing.T) {
+	families, err := Parse(strings.NewReader(aliasMetrics))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	collector := &VLLM{metrics: storedMetrics{history: make(map[string][]MetricSnapshot)}}
+	collector.store(time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC), families)
+
+	var output strings.Builder
+	if err := collector.PrintSelectedMetrics(&output); err != nil {
+		t.Fatalf("PrintSelectedMetrics() error = %v", err)
+	}
+
+	got := output.String()
+	for _, want := range []string{
+		"vllm:kv_cache_usage_perc{model_name=\"test-model\"} 0.42",
+		"vllm:inter_token_latency_seconds_sum{model_name=\"test-model\"} 0.2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PrintSelectedMetrics() output missing preferred alias %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{
+		"vllm:gpu_cache_usage_perc",
+		"vllm:time_per_output_token_seconds",
+	} {
+		if strings.Contains(got, notWant) {
+			t.Errorf("PrintSelectedMetrics() included fallback alias %q:\n%s", notWant, got)
+		}
 	}
 }
 
@@ -199,11 +333,20 @@ func TestVLLMScrapeStoresSelectedMetricHistory(t *testing.T) {
 	if history[0].CapturedAt.IsZero() || history[0].Family.GetMetric()[0].GetGauge().GetValue() != 2 {
 		t.Errorf("unexpected stored snapshot: %#v", history[0])
 	}
+	if history[0].Definition.ID != "requests_running" ||
+		history[0].Definition.Kind != MetricKindGauge ||
+		history[0].Definition.Aggregation != AggregationAverage {
+		t.Errorf("unexpected stored definition: %#v", history[0].Definition)
+	}
 
 	history[0].Family.Metric[0].Gauge.Value = proto.Float64(99)
+	history[0].Definition.Names[0] = "mutated"
 	freshHistory := collector.History("vllm:num_requests_running")
 	if got := freshHistory[0].Family.GetMetric()[0].GetGauge().GetValue(); got != 2 {
 		t.Errorf("mutating returned history changed stored value to %v", got)
+	}
+	if got := freshHistory[0].Definition.Names[0]; got != "vllm:num_requests_running" {
+		t.Errorf("mutating returned definition changed stored name to %q", got)
 	}
 
 	all := collector.Histories()

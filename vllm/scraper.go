@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -128,48 +130,197 @@ func Parse(reader io.Reader) (MetricFamilies, error) {
 	return parse(reader, expfmt.NewFormat(expfmt.TypeTextPlain))
 }
 
-var selectedMetricGroups = [][]string{
-	{"vllm:time_to_first_token_seconds"},
-	{"vllm:inter_token_latency_seconds", "vllm:time_per_output_token_seconds"},
-	{"vllm:e2e_request_latency_seconds"},
-	{"vllm:request_queue_time_seconds"},
-	{"vllm:request_prefill_time_seconds"},
-	{"vllm:request_decode_time_seconds"},
-	{"vllm:num_requests_running"},
-	{"vllm:num_requests_waiting"},
-	{"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"},
-	{"vllm:request_prompt_tokens", "vllm:prompt_tokens_total"},
-	{"vllm:request_generation_tokens", "vllm:generation_tokens_total"},
-	{"vllm:avg_prompt_throughput_toks_per_s"},
-	{"vllm:avg_generation_throughput_toks_per_s"},
+type MetricKind string
+
+const (
+	MetricKindHistogram MetricKind = "histogram"
+	MetricKindGauge     MetricKind = "gauge"
+	MetricKindCounter   MetricKind = "counter"
+	MetricKindSummary   MetricKind = "summary"
+)
+
+type AggregationKind string
+
+const (
+	AggregationP95      AggregationKind = "p95"
+	AggregationLatest   AggregationKind = "latest"
+	AggregationAverage  AggregationKind = "average"
+	AggregationIncrease AggregationKind = "increase"
+	AggregationRate     AggregationKind = "rate"
+)
+
+type MetricUnit string
+
+const (
+	MetricUnitSeconds         MetricUnit = "seconds"
+	MetricUnitCount           MetricUnit = "count"
+	MetricUnitPercent         MetricUnit = "percent"
+	MetricUnitTokens          MetricUnit = "tokens"
+	MetricUnitTokensPerSecond MetricUnit = "tokens_per_second"
+)
+
+type MetricDefinition struct {
+	ID            string
+	DisplayName   string
+	Names         []string
+	Kind          MetricKind
+	Aggregation   AggregationKind
+	Unit          MetricUnit
+	HigherIsWorse bool
 }
 
-type selectedMetricFamily struct {
-	name   string
-	family *dto.MetricFamily
+var selectedMetricGroups = []MetricDefinition{
+	{
+		ID:            "ttft",
+		DisplayName:   "TTFT",
+		Names:         []string{"vllm:time_to_first_token_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "inter_token_latency",
+		DisplayName:   "inter-token latency",
+		Names:         []string{"vllm:inter_token_latency_seconds", "vllm:time_per_output_token_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "e2e_latency",
+		DisplayName:   "E2E request latency",
+		Names:         []string{"vllm:e2e_request_latency_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "queue_time",
+		DisplayName:   "request queue time",
+		Names:         []string{"vllm:request_queue_time_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "prefill_time",
+		DisplayName:   "request prefill time",
+		Names:         []string{"vllm:request_prefill_time_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "decode_time",
+		DisplayName:   "request decode time",
+		Names:         []string{"vllm:request_decode_time_seconds"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitSeconds,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "requests_running",
+		DisplayName:   "running requests",
+		Names:         []string{"vllm:num_requests_running"},
+		Kind:          MetricKindGauge,
+		Aggregation:   AggregationAverage,
+		Unit:          MetricUnitCount,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "requests_waiting",
+		DisplayName:   "waiting requests",
+		Names:         []string{"vllm:num_requests_waiting"},
+		Kind:          MetricKindGauge,
+		Aggregation:   AggregationAverage,
+		Unit:          MetricUnitCount,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "cache_usage",
+		DisplayName:   "KV cache usage",
+		Names:         []string{"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"},
+		Kind:          MetricKindGauge,
+		Aggregation:   AggregationAverage,
+		Unit:          MetricUnitPercent,
+		HigherIsWorse: true,
+	},
+	{
+		ID:            "prompt_tokens",
+		DisplayName:   "prompt tokens",
+		Names:         []string{"vllm:request_prompt_tokens", "vllm:prompt_tokens_total"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitTokens,
+		HigherIsWorse: false,
+	},
+	{
+		ID:            "generation_tokens",
+		DisplayName:   "generation tokens",
+		Names:         []string{"vllm:request_generation_tokens", "vllm:generation_tokens_total"},
+		Kind:          MetricKindHistogram,
+		Aggregation:   AggregationP95,
+		Unit:          MetricUnitTokens,
+		HigherIsWorse: false,
+	},
+	{
+		ID:            "prompt_throughput",
+		DisplayName:   "prompt throughput",
+		Names:         []string{"vllm:avg_prompt_throughput_toks_per_s"},
+		Kind:          MetricKindGauge,
+		Aggregation:   AggregationAverage,
+		Unit:          MetricUnitTokensPerSecond,
+		HigherIsWorse: false,
+	},
+	{
+		ID:            "generation_throughput",
+		DisplayName:   "generation throughput",
+		Names:         []string{"vllm:avg_generation_throughput_toks_per_s"},
+		Kind:          MetricKindGauge,
+		Aggregation:   AggregationAverage,
+		Unit:          MetricUnitTokensPerSecond,
+		HigherIsWorse: false,
+	},
 }
 
-func selectedFamilies(families MetricFamilies) MetricFamilies {
-	selected := make(MetricFamilies)
-	for _, entry := range selectedFamiliesInOrder(families) {
-		selected[entry.name] = entry.family
+func selectedMetricDefinition(name string) (MetricDefinition, bool) {
+	for _, group := range selectedMetricGroups {
+		if slices.Contains(group.Names, name) {
+			return group, true
+		}
 	}
-	return selected
+	return MetricDefinition{}, false
 }
 
-func selectedFamiliesInOrder(families MetricFamilies) []selectedMetricFamily {
-	selected := make([]selectedMetricFamily, 0, len(selectedMetricGroups))
-	for _, names := range selectedMetricGroups {
-		for _, name := range names {
-			family, ok := families[name]
+func (d MetricDefinition) containsName(name string) bool {
+	return slices.Contains(d.Names, name)
+}
+
+func scanSelectedFamilies(families MetricFamilies) iter.Seq[selectedMetricFamily] {
+	return func(yield func(selectedMetricFamily) bool) {
+		for _, family := range families {
+			name := family.GetName()
+			definition, ok := selectedMetricDefinition(name)
 			if !ok {
 				continue
 			}
-			selected = append(selected, selectedMetricFamily{name: name, family: family})
-			break
+			if !yield(selectedMetricFamily{definition: definition, name: name, family: family}) {
+				return
+			}
 		}
 	}
-	return selected
+}
+
+type selectedMetricFamily struct {
+	definition MetricDefinition
+	name       string
+	family     *dto.MetricFamily
 }
 
 func parse(reader io.Reader, format expfmt.Format) (MetricFamilies, error) {
